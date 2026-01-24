@@ -2,17 +2,20 @@
 
 **Goal:** Create the test infrastructure and implement patch branch discovery logic.
 
+**Testing Approach:** Snapshot testing - each test runs actual commands and compares output to committed snapshots.
+
 ## Overview
 
 This phase establishes the foundation for all future development:
 
 1. A test harness that creates isolated Git repositories
-2. Branch discovery logic that finds and sorts patch branches
-3. Tests that verify the discovery logic works correctly
+2. Snapshot testing infrastructure for CLI output validation
+3. Branch discovery logic that finds and sorts patch branches
+4. Individual test files for each test case (test-01-*, test-02-*, etc.)
 
 ## Part 1: Test Harness
 
-### File: `tests/test-harness.sh`
+### File: `tests/harness.sh`
 
 Create a test harness that provides:
 
@@ -82,6 +85,25 @@ create_patch_branch "patch-feature-auth" 3
 - Modifies a patch branch to create a rebase conflict
 - Changes same lines that will exist in upstream
 - Used to test conflict handling
+
+#### Snapshot Testing Functions
+
+**`assert_snapshot(test_name, output)`**
+
+- Compares command output to a committed snapshot file
+- Creates snapshot if it doesn't exist
+- Scrubs nondeterministic output (SHAs, timestamps, paths)
+- Shows diff as unified patch if output doesn't match
+- Honors SNAPSHOT_UPDATE=1 environment variable to update snapshots
+- Snapshots are stored in `tests/snapshots/*.snap` with numeric prefixes
+
+**`scrub_output()`**
+
+- Removes nondeterministic output from test results
+- Replaces:
+  - Temporary paths: `/tmp/xyz123` → `/tmp/TEMP_DIR`
+  - Git SHAs: `a1b2c3d...` → `COMMIT_SHA`
+  - Dates/times: `2024-01-24` → `DATE`
 
 #### Assertion Functions
 
@@ -272,9 +294,106 @@ Found 3 patch branches
 
 ## Part 3: Tests for Discovery
 
-### File: `tests/test-discovery.sh`
+### Test Structure
 
-Create comprehensive tests:
+Each test is a separate file (test-01-*.sh, test-02-*.sh, etc.) that:
+
+1. Sources the test harness
+2. Sets up a specific scenario
+3. Runs `patchstack list`
+4. Compares output to a snapshot file
+5. Cleans up
+
+**Benefits:**
+
+- Each test is counted individually in the test runner
+- Tests can be run independently
+- Easy to see which specific test failed
+- Snapshots make expected output explicit
+
+### File: `tests/test-01-no-patches.sh`
+
+Test: No patch branches
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/test-harness.sh"
+
+setup() {
+    local fork
+    fork=$(setup_test_env)
+    cd "$fork"
+}
+
+setup
+output=$("$PATCHSTACK" list 2>&1)
+assert_snapshot "no-patches" "$output"
+cleanup_test_env
+```
+
+### File: `tests/test-02-three-patches.sh`
+
+Test: Three patches sorted lexicographically
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/test-harness.sh"
+
+setup() {
+    local fork
+    fork=$(setup_test_env)
+    cd "$fork"
+
+    # Create patches out of order
+    create_patch_branch "patch-zebra" 1
+    create_patch_branch "patch-alpha" 2
+    create_patch_branch "patch-beta" 1
+}
+
+setup
+output=$("$PATCHSTACK" list 2>&1)
+assert_snapshot "three-patches" "$output"
+cleanup_test_env
+```
+
+### Additional Test Files
+
+- `test-03-excludes-orphan.sh` - Excludes non-descendants
+- `test-04-excludes-main.sh` - Excludes main branch
+- `test-05-multiple-commits.sh` - Handles multiple commits per branch
+- `test-06-no-patch-prefix.sh` - Branches without 'patch-' prefix
+- `test-07-single-patch.sh` - Single patch branch
+
+### Snapshot Files
+
+After first run, snapshots are created in `tests/snapshots/` with numeric prefixes:
+
+```
+tests/snapshots/
+├── 01-no-patches.snap
+├── 02-three-patches.snap
+├── 03-excludes-orphan.snap
+├── 04-excludes-main.snap
+├── 05-multiple-commits.snap
+├── 06-no-patch-prefix.snap
+└── 07-single-patch.snap
+```
+
+Example snapshot content (`02-three-patches.snap`):
+
+```
+patch-alpha
+patch-beta
+patch-zebra
+
+Found 3 patch branches
+```
 
 #### Test 1: No Patch Branches
 
@@ -285,87 +404,6 @@ test_no_patches() {
 
     local patches=$(./scripts/patchstack list)
     assert_equal "0" "$(echo "$patches" | grep -c 'patch-' || true)"
-
-    cleanup_test_env
-}
-```
-
-#### Test 2: Three Patch Branches
-
-```bash
-test_three_patches() {
-    local fork=$(setup_test_env)
-    cd "$fork"
-
-    # Create patches out of order
-    create_patch_branch "patch-zebra" 1
-    create_patch_branch "patch-alpha" 2
-    create_patch_branch "patch-beta" 1
-
-    local patches=$(./scripts/patchstack list | grep patch-)
-
-    # Should be sorted lexicographically
-    assert_equal "patch-alpha" "$(echo "$patches" | sed -n '1p')"
-    assert_equal "patch-beta" "$(echo "$patches" | sed -n '2p')"
-    assert_equal "patch-zebra" "$(echo "$patches" | sed -n '3p')"
-
-    cleanup_test_env
-}
-```
-
-#### Test 3: Excludes Non-Descendants
-
-```bash
-test_excludes_non_descendants() {
-    local fork=$(setup_test_env)
-    cd "$fork"
-
-    # Create branch that is NOT a descendant of origin/main
-    git checkout -b patch-orphan --orphan
-    git commit --allow-empty -m "Orphan commit"
-    git push origin patch-orphan
-
-    # Create normal patch branch
-    git checkout main
-    create_patch_branch "patch-normal" 1
-
-    local patches=$(./scripts/patchstack list | grep patch-)
-
-    # Should only see patch-normal
-    assert_equal "1" "$(echo "$patches" | wc -l)"
-    assert_contains "$patches" "patch-normal"
-
-    cleanup_test_env
-}
-```
-
-#### Test 4: Excludes Main Branch
-
-```bash
-test_excludes_main() {
-    local fork=$(setup_test_env)
-    cd "$fork"
-
-    create_patch_branch "patch-test" 1
-
-    local patches=$(./scripts/patchstack list)
-
-    # Should not include 'main' in output
-    assert_equal "0" "$(echo "$patches" | grep -c '^main$' || true)"
-
-    cleanup_test_env
-}
-```
-
-#### Test 5: Empty Result When Only Main Exists
-
-```bash
-test_only_main_exists() {
-    local fork=$(setup_test_env)
-    cd "$fork"
-
-    local patches=$(./scripts/patchstack list | grep patch- || true)
-    assert_equal "" "$patches"
 
     cleanup_test_env
 }
@@ -384,29 +422,74 @@ chmod +x tests/*.sh scripts/patchstack
 ### Expected Output
 
 ```
-Running test-discovery...
-✓ test-discovery passed
+Running test-01-no-patches...
+✓ Snapshot matches: no-patches
+✓ test-01-no-patches passed
+
+Running test-02-three-patches...
+✓ Snapshot matches: three-patches
+✓ test-02-three-patches passed
+
+[... more tests ...]
 
 ========================
-Results: 1 passed, 0 failed
+Results: 7 passed, 0 failed
+All tests passed!
+```
+
+### Updating Snapshots
+
+When output format changes:
+
+```bash
+# Update all snapshots
+./tests/run-all-tests.sh --apply
+
+# Update specific snapshot
+SNAPSHOT_UPDATE=1 ./tests/test-01-no-patches.sh
+
+# Review changes
+git diff tests/snapshots/
+
+# Commit if correct
+git add tests/snapshots/
+git commit -m "Update snapshots for new output format"
+```
+
+When a test fails, diff is shown as a unified patch:
+
+```
+✗ Snapshot mismatch: 04-excludes-main
+
+--- /path/to/tests/snapshots/04-excludes-main.snap
++++ actual output
+@@ -1,3 +1,2 @@
+ patch-test
+-
+-Found 1 patch branches
++Found 2 patch branches
+
+To update snapshot: run with --apply flag
 ```
 
 ## Success Criteria
 
 - [ ] Test harness can create isolated Git repositories
-- [ ] Test harness provides useful helper functions
+- [ ] Test harness provides snapshot testing functions
 - [ ] Branch discovery correctly identifies patch branches
 - [ ] Branch discovery excludes main branch
 - [ ] Branch discovery filters by ancestry
 - [ ] Branch discovery sorts lexicographically
-- [ ] All 5+ tests pass
+- [ ] All 7+ tests pass with snapshots
 - [ ] Tests run in <2 seconds
 - [ ] Tests clean up after themselves
+- [ ] Snapshots are committed to Git
 
 ## Next Phase
 
 Once this phase is complete:
 
 - Tests for Phase 1.2 will use this harness
+- Snapshot testing will be used for all CLI output
 - Branch discovery will be called by the sync command
 - We can focus on rebase logic knowing discovery works correctly

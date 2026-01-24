@@ -210,6 +210,25 @@ Patch-C changes merged upstream → Patch-C deleted, recorded in notes
 - Bash 4.0+ or compatible shell
 - SSH or HTTPS access to repositories
 
+## Testing
+
+Patchstack uses snapshot testing to verify CLI behavior:
+
+```bash
+# Run all tests
+./tests/run-all-tests.sh
+
+# Run a specific test
+./tests/test-01-no-patches.sh
+
+# Update snapshots after intentional output changes
+./tests/run-all-tests.sh --apply
+```
+
+When a test fails, the difference is shown as a unified patch. Use `--apply` to update snapshots.
+
+Tests create isolated Git repositories and compare command output to committed snapshots in `tests/snapshots/`. See [AGENTS.md](AGENTS.md) for testing philosophy.
+
 ## Architecture
 
 See [GUIDE.md](GUIDE.md) for detailed design specification and [AGENTS.md](AGENTS.md) for the implementation plan.

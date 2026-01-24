@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# Patchstack: Git automation for maintaining patch stacks
+# Maintains long-living forks as deterministic patch stacks on top of upstream repositories
+
+set -euo pipefail
+
+# Default configuration (zero-config)
+PATCH_REMOTE="${PATCH_REMOTE:-origin}"
+UPSTREAM_REMOTE="${UPSTREAM_REMOTE:-upstream}"
+MAIN_BRANCH="${MAIN_BRANCH:-main}"
+
+# Discover patch branches that are descendants of origin/main
+discover_patch_branches() {
+    local base_ref="refs/remotes/$PATCH_REMOTE/$MAIN_BRANCH"
+    local base_sha
+    base_sha=$(git rev-parse "$base_ref" 2>/dev/null) || {
+        echo "Error: Cannot find $base_ref" >&2
+        return 1
+    }
+
+    # Collect branches that are descendants of the base
+    local branches=()
+    while IFS= read -r ref; do
+        # Skip main branch itself
+        [[ "$ref" == "$base_ref" ]] && continue
+
+        # Skip HEAD
+        [[ "$ref" == "refs/remotes/$PATCH_REMOTE/HEAD" ]] && continue
+
+        # Check if this branch is a descendant of base
+        local branch_sha
+        branch_sha=$(git rev-parse "$ref")
+        if git merge-base --is-ancestor "$base_sha" "$branch_sha" 2>/dev/null; then
+            # Extract branch name (remove refs/remotes/origin/ prefix)
+            local branch_name=${ref#refs/remotes/"$PATCH_REMOTE"/}
+            branches+=("$branch_name")
+        fi
+    done < <(git for-each-ref --format='%(refname)' "refs/remotes/$PATCH_REMOTE")
+
+    # Sort lexicographically and output
+    if [[ ${#branches[@]} -gt 0 ]]; then
+        printf '%s\n' "${branches[@]}" | sort
+    fi
+}
+
+# List command: show all patch branches
+cmd_list() {
+    local patches
+    patches=$(discover_patch_branches)
+
+    if [[ -z "$patches" ]]; then
+        echo "No patch branches found"
+        return 0
+    fi
+
+    echo "$patches"
+    echo
+    local count
+    count=$(echo "$patches" | wc -l | tr -d ' ')
+    echo "Found $count patch branches"
+}
+
+# Sync command: synchronize patch stack with upstream (placeholder)
+cmd_sync() {
+    echo "Error: sync command not yet implemented" >&2
+    exit 1
+}
+
+# Usage information
+usage() {
+    cat <<EOF
+Usage: patchstack <command>
+
+Commands:
+    list    List all patch branches
+    sync    Synchronize patch stack with upstream (not yet implemented)
+
+Description:
+    Patchstack maintains long-living forks as deterministic patch stacks
+    on top of upstream repositories.
+
+Configuration:
+    PATCH_REMOTE    Remote for patch branches (default: origin)
+    UPSTREAM_REMOTE Remote for upstream (default: upstream)
+    MAIN_BRANCH     Main branch name (default: main)
+EOF
+}
+
+# Main entry point
+main() {
+    local command="${1:-}"
+
+    case "$command" in
+        list)
+            cmd_list
+            ;;
+        sync)
+            cmd_sync
+            ;;
+        "")
+            usage
+            exit 1
+            ;;
+        *)
+            echo "Error: Unknown command '$command'" >&2
+            echo >&2
+            usage
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"

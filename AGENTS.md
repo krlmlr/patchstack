@@ -198,6 +198,41 @@ test_feature_name() {
 
 ## Testing Philosophy
 
+### Snapshot Testing
+
+Patchstack uses **snapshot testing** for all CLI commands:
+
+- Each test runs the actual `patchstack` command in an isolated environment
+- Output is compared against committed snapshot files in `tests/snapshots/`
+- Nondeterministic output (SHAs, timestamps, temp paths) is scrubbed before comparison
+- Snapshots are versioned in Git, making it easy to review output changes
+
+**Benefits:**
+
+- Tests verify the actual user-facing behavior
+- Easy to review what changed when tests fail
+- Forces us to think about output format and clarity
+- Snapshots serve as documentation of expected behavior
+
+**Workflow:**
+
+1. Write a test that runs a patchstack command
+2. Run the test to generate initial snapshot
+3. Commit the snapshot file to Git
+4. Future test runs compare output to the snapshot
+5. If output changes, review the diff and update snapshot if intended
+
+### Test Structure
+
+Each test is a standalone bash script:
+
+- **Setup:** Create test repositories with specific conditions
+- **Execute:** Run `patchstack` command
+- **Assert:** Compare output to snapshot using `assert_snapshot`
+- **Cleanup:** Remove temporary test directories
+
+Tests should be numbered sequentially (test-01-*, test-02-*, etc.) for predictable execution order when needed.
+
 ### What to Test
 
 - Happy path (everything works)
@@ -216,10 +251,43 @@ test_feature_name() {
 
 ### Test Independence
 
-- Each test creates its own repos
-- Tests don't depend on execution order
+- Each test creates its own isolated Git repositories
+- Tests don't depend on execution order (except when explicitly numbered)
 - Tests clean up after themselves
 - Tests should be runnable individually
+
+### Updating Snapshots
+
+When output format changes intentionally:
+
+```bash
+# Update all snapshots with --apply flag
+./tests/run-all-tests.sh --apply
+
+# Or update a specific snapshot
+SNAPSHOT_UPDATE=1 ./tests/test-01-no-patches.sh
+
+# Review and commit the updated snapshots
+git diff tests/snapshots/
+git add tests/snapshots/
+git commit -m "Update snapshots for new output format"
+```
+
+When a snapshot test fails, the diff is shown as a unified patch:
+
+```
+✗ Snapshot mismatch: 04-excludes-main
+
+--- /path/to/tests/snapshots/04-excludes-main.snap
++++ actual output
+@@ -1 +1,3 @@
+-wrong content
++patch-test
++
++Found 1 patch branches
+
+To update snapshot: run with --apply flag
+```
 
 ## Communication with Users
 
