@@ -291,14 +291,14 @@ Notes record old tip and deletion reason.
 
 ## Failure Modes & Handling
 
-| Failure | Effect | Action |
-|------|------|------|
-| Fetch/auth failure | No state known | Abort early |
-| Rebase conflict | Patch invalid | Keep branch unchanged |
-| Integration conflict | Patch inconsistent | **Do not publish rebased branch** |
-| Empty patch | No net effect | Delete or keep per policy |
-| Lease failure | Concurrent update | Atomic push aborts |
-| No atomic support | Unsafe | Treat as fatal |
+| Failure              | Effect               | Action                               |
+|----------------------|----------------------|--------------------------------------|
+| Fetch/auth failure   | No state known       | Abort early                          |
+| Rebase conflict      | Patch invalid        | Keep branch unchanged                |
+| Integration conflict | Patch inconsistent   | **Do not publish rebased branch**    |
+| Empty patch          | No net effect        | Delete or keep per policy            |
+| Lease failure        | Concurrent update    | Atomic push aborts                   |
+| No atomic support    | Unsafe               | Treat as fatal                       |
 
 ---
 
