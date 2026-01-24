@@ -44,6 +44,7 @@ The patch commits are everything after `origin/main` on the patch branch. We:
 4. Store result without affecting working tree
 
 **Why this approach:**
+
 - Handles force-pushed upstream (no ancestry dependency)
 - Merge commits are squashed (deterministic history)
 - Full control over conflict handling
@@ -187,7 +188,7 @@ replay_patch_commits() {
 
 | Code | Meaning              | Description                                         |
 |------|----------------------|-----------------------------------------------------|
-| 0    | Success              | Replayed ref in `refs/patchstack/tmp/$branch_name` |
+| 0    | Success              | Replayed ref in `refs/patchstack/tmp/$branch_name`  |
 | 1    | Cannot list commits  | Branch relationship error                           |
 | 2    | No commits to replay | Branch has no commits beyond main                   |
 | 3    | Replay conflict      | Cherry-pick failed, conflict in changes             |
@@ -498,7 +499,7 @@ test_merge_commit_squash() {
 
 ## Part 4: Test Harness Enhancements
 
-### Update `tests/test-harness.sh`
+### Update `tests/harness.sh`
 
 Add helper for creating conflicts:
 
