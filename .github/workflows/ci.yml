@@ -30,6 +30,11 @@ jobs:
           git config --global user.name "CI Bot"
           git config --global user.email "ci@example.com"
 
+      - nama: Install bash and shellcheck from Homebrew
+        if: runner.os == 'macOS'
+        run: |
+          brew install bash shellcheck
+
       - name: Check script syntax
         run: |
           bash -n scripts/patchstack
