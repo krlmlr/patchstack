@@ -23,10 +23,10 @@ create_patch_branch "patch-beta" 2
 advance_upstream 1
 git fetch -q upstream
 
-# Start 5 sync processes in parallel without sleeping
+# Start 10 sync processes in parallel without sleeping
 PIDS=()
 OUTPUTS=()
-for i in {1..5}; do
+for i in {1..10}; do
     output_file="$TEST_DIR/sync-$i.log"
     OUTPUTS+=("$output_file")
     "$PATCHSTACK" sync > "$output_file" 2>&1 &
@@ -79,10 +79,10 @@ if [[ $synced_count -ne 1 ]]; then
 fi
 echo "✓ Exactly one process synced the patches"
 
-# The other 4 should either be locked or find nothing to do
+# The other 9 should either be locked or find nothing to do
 other_count=$((no_patches_count + locked_count))
-if [[ $other_count -ne 4 ]]; then
-    echo "✗ Expected 4 other processes, got $other_count"
+if [[ $other_count -ne 9 ]]; then
+    echo "✗ Expected 9 other processes, got $other_count"
     cleanup_test_env
     exit 1
 fi
