@@ -59,22 +59,22 @@
 
 **Build:**
 
-- [ ] Implement sequential squash integration (hardest Git operation)
+- [x] Implement sequential squash integration (hardest Git operation)
     - Start from upstream/main
     - For each viable patch in order:
         - Create squash commit of all patch changes
         - Try to apply onto integration branch
     - Build final `refs/patchstack/tmp/main` reference
-- [ ] Detect integration conflicts (patch rebases but conflicts during squash)
-- [ ] Gate logic: only viable patches contribute to main
+- [x] Detect integration conflicts (patch rebases but conflicts during squash)
+- [x] Gate logic: only viable patches contribute to main
 
 **Test:**
 
-- [ ] Test: squash 3 clean patches into new main
-- [ ] Test: integration conflict excludes patch-B, includes A and C
-- [ ] Test: verify squash commit messages include patch name
-- [ ] Test: empty patches excluded from integration
-- [ ] Test: multiple integration failures handled correctly
+- [x] Test: squash 3 clean patches into new main
+- [x] Test: integration conflict excludes patch-B, includes A and C
+- [x] Test: verify squash commit messages include patch name
+- [x] Test: empty patches excluded from integration
+- [x] Test: multiple integration failures handled correctly
 
 **Detailed Plan:** See [plan/130-squash-integration.md](plan/130-squash-integration.md)
 

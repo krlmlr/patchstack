@@ -73,7 +73,7 @@ replay_patch_commits() {
     fi
 
     # Create temporary branch starting from upstream/main
-    if ! git branch -f "$tmp_branch" "$upstream_ref" 2>/dev/null; then
+    if ! git branch -f "$tmp_branch" "$upstream_ref" >/dev/null 2>&1; then
         echo "ERROR: Cannot create temporary branch" >&2
         return 1
     fi
@@ -144,8 +144,8 @@ replay_patch_commits() {
     fi
 
     # Update the temporary ref
-    git update-ref "$tmp_ref" "$tmp_branch"
-    git branch -D "$tmp_branch" 2>/dev/null || true
+    git update-ref "$tmp_ref" "$tmp_branch" >/dev/null 2>&1
+    git branch -D "$tmp_branch" >/dev/null 2>&1 || true
 
     # Check if patch is empty (replayed tree equals upstream tree)
     local replayed_tree
@@ -195,6 +195,158 @@ replay_all_patches() {
     printf '%s\n' "${results[@]}"
 }
 
+# Create a squash commit of all changes in a patch branch
+# Args: branch_name, parent_ref (current tip of integration branch), tmp_ref (replayed patch ref)
+# Returns: 0=success (outputs SHA), 1=git error, 2=integration conflict
+create_squash_commit() {
+    local branch_name=$1
+    local parent_ref=$2
+    local tmp_ref=$3
+    local origin_main="refs/remotes/$PATCH_REMOTE/$MAIN_BRANCH"
+    local patch_remote_ref="refs/remotes/$PATCH_REMOTE/$branch_name"
+
+    # Get commit message from first commit in patch
+    local first_commit
+    first_commit=$(git rev-list --reverse "$origin_main..$patch_remote_ref" 2>/dev/null | head -n1)
+    local commit_msg
+    commit_msg=$(git log -1 --format=%B "$first_commit" 2>/dev/null)
+
+    # Count original commits
+    local commit_count
+    commit_count=$(git rev-list --count "$origin_main..$patch_remote_ref" 2>/dev/null)
+
+    # Create squash commit message
+    local squash_msg="Squash: $branch_name
+
+$commit_msg
+
+Original commits: $commit_count"
+
+    # Save current position
+    local current_branch
+    current_branch=$(git symbolic-ref --short HEAD 2>/dev/null || echo "")
+    local tmp_branch="patchstack-integrate-$branch_name"
+
+    # Create integration branch from parent ref
+    if ! git branch -f "$tmp_branch" "$parent_ref" >/dev/null 2>&1; then
+        return 1
+    fi
+
+    if ! git checkout -q "$tmp_branch" >/dev/null 2>&1; then
+        git branch -D "$tmp_branch" >/dev/null 2>&1 || true
+        return 1
+    fi
+
+    # Attempt squash merge from replayed patch
+    if ! git merge --squash --no-commit "$tmp_ref" >/dev/null 2>&1; then
+        # Conflict during integration
+        git merge --abort >/dev/null 2>&1 || true
+        git reset --hard >/dev/null 2>&1 || true
+        git checkout -q "$current_branch" >/dev/null 2>&1 || git checkout -q main >/dev/null 2>&1 || true
+        git branch -D "$tmp_branch" >/dev/null 2>&1 || true
+        return 2
+    fi
+
+    # Create the squash commit
+    if ! git commit -m "$squash_msg" >/dev/null 2>&1; then
+        # This can happen if there are no changes (shouldn't happen since we already replayed)
+        git reset --hard >/dev/null 2>&1 || true
+        git checkout -q "$current_branch" >/dev/null 2>&1 || git checkout -q main >/dev/null 2>&1 || true
+        git branch -D "$tmp_branch" >/dev/null 2>&1 || true
+        return 1
+    fi
+
+    # Get the commit SHA
+    local squash_sha
+    squash_sha=$(git rev-parse HEAD 2>/dev/null)
+
+    # Return to original state
+    if [[ -n "$current_branch" ]]; then
+        git checkout -q "$current_branch" >/dev/null 2>&1 || git checkout -q main >/dev/null 2>&1 || true
+    else
+        git checkout -q main >/dev/null 2>&1 || true
+    fi
+    git branch -D "$tmp_branch" >/dev/null 2>&1 || true
+
+    echo "$squash_sha"
+    return 0
+}
+
+# Build new main by integrating patches sequentially
+integrate_patches() {
+    local upstream_ref="refs/remotes/$UPSTREAM_REMOTE/$MAIN_BRANCH"
+    local integration_ref="refs/patchstack/tmp/main"
+
+    # Start from upstream/main
+    local current_tip
+    current_tip=$(git rev-parse "$upstream_ref")
+
+    # Get viable patches (successfully replayed)
+    local viable_patches=()
+    local tmp_refs
+    tmp_refs=$(git for-each-ref --format='%(refname)' 'refs/patchstack/tmp/')
+
+    for ref in $tmp_refs; do
+        # Skip main ref (we're building it)
+        [[ "$ref" == "$integration_ref" ]] && continue
+
+        # Extract branch name
+        local branch_name=${ref#refs/patchstack/tmp/}
+        viable_patches+=("$branch_name")
+    done
+
+    # Sort lexicographically
+    if [[ ${#viable_patches[@]} -gt 0 ]]; then
+        IFS=$'\n' read -r -d '' -a viable_patches < <(printf '%s\n' "${viable_patches[@]}" | sort && printf '\0') || true
+    fi
+
+    # Track results
+    local integrated=()
+    local failed=()
+
+    echo "Integrating ${#viable_patches[@]} viable patches..."
+
+    for branch_name in "${viable_patches[@]}"; do
+        local tmp_ref="refs/patchstack/tmp/$branch_name"
+
+        echo "  Integrating $branch_name..."
+
+        # Create squash commit
+        local squash_sha
+        if squash_sha=$(create_squash_commit "$branch_name" "$current_tip" "$tmp_ref"); then
+            echo "    ✓ Integrated"
+            current_tip="$squash_sha"
+            integrated+=("$branch_name")
+        else
+            local code=$?
+            if [[ $code -eq 2 ]]; then
+                echo "    ✗ Integration conflict"
+                failed+=("$branch_name:integration-conflict")
+            else
+                echo "    ✗ Integration error"
+                failed+=("$branch_name:error")
+            fi
+        fi
+    done
+
+    # Set the integration ref to final tip
+    git update-ref "$integration_ref" "$current_tip"
+
+    echo
+    echo "Integration summary:"
+    echo "  Integrated: ${#integrated[@]} patches"
+    echo "  Failed: ${#failed[@]} patches"
+
+    # Output results
+    for branch in "${integrated[@]}"; do
+        echo "integrated:$branch"
+    done
+
+    for result in "${failed[@]}"; do
+        echo "failed:$result"
+    done
+}
+
 # List command: show all patch branches
 cmd_list() {
     local patches
@@ -215,28 +367,66 @@ cmd_list() {
 # Sync command: synchronize patch stack with upstream
 cmd_sync() {
     echo "Starting patchstack sync..."
+    echo
 
-    # Discover patches
+    # Phase 1: Discovery
+    echo "Phase 1: Discovering patch branches"
     local patches
     readarray -t patches < <(discover_patch_branches)
     echo "Found ${#patches[@]} patch branches"
+    echo
 
     if [[ ${#patches[@]} -eq 0 ]]; then
         echo "No patches to sync"
         return 0
     fi
 
-    # Replay patches
-    echo
-    local results
-    readarray -t results < <(replay_all_patches)
+    # Phase 2: Replay
+    echo "Phase 2: Replaying patches onto upstream"
+    local replay_results
+    readarray -t replay_results < <(replay_all_patches)
 
-    # Summary
+    # Count viable patches
+    local viable=0
+    for result in "${replay_results[@]}"; do
+        if [[ "$result" == *:success ]]; then
+            viable=$((viable + 1))
+        fi
+    done
+    echo "Viable patches: $viable"
     echo
-    echo "Replay summary:"
-    for result in "${results[@]}"; do
+
+    if [[ $viable -eq 0 ]]; then
+        echo "No viable patches to integrate"
+        echo
+        echo "Replay summary:"
+        for result in "${replay_results[@]}"; do
+            echo "  $result"
+        done
+        return 0
+    fi
+
+    # Phase 3: Integration
+    echo "Phase 3: Integrating patches into new main"
+    local integration_output
+    integration_output=$(integrate_patches)
+
+    # Display integration output (non-result lines)
+    echo "$integration_output" | grep -v "^integrated:" | grep -v "^failed:" || true
+    echo
+
+    # Final summary
+    echo "==================================="
+    echo "Sync Summary"
+    echo "==================================="
+    echo
+    echo "Replay results:"
+    for result in "${replay_results[@]}"; do
         echo "  $result"
     done
+    echo
+    echo "Integration results:"
+    echo "$integration_output" | grep "^integrated:\|^failed:" || true
 }
 
 # Usage information
@@ -246,7 +436,7 @@ Usage: patchstack <command>
 
 Commands:
     list    List all patch branches
-    sync    Synchronize patch stack with upstream (not yet implemented)
+    sync    Synchronize patch stack with upstream
 
 Description:
     Patchstack maintains long-living forks as deterministic patch stacks
