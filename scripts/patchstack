@@ -859,7 +859,56 @@ cmd_sync() {
     echo "📊 Sync Complete"
     echo "==================================="
     echo
-    echo "✓ All patches synced successfully"
+
+    # Count different outcomes
+    local success=0
+    local failed=0
+    local empty=0
+    local failed_patches=()
+    local empty_patches=()
+
+    for result in "${replay_results[@]}"; do
+        local patch=${result%%:*}
+        local status=${result#*:}
+        
+        case "$status" in
+            success)
+                ((success++)) || true
+                ;;
+            empty)
+                ((empty++)) || true
+                empty_patches+=("$patch")
+                ;;
+            conflict|invalid|no-changes)
+                ((failed++)) || true
+                failed_patches+=("$patch")
+                ;;
+        esac
+    done
+
+    # Show summary
+    if [[ $success -gt 0 ]]; then
+        echo "✓ Synced: $success patches"
+    fi
+    
+    if [[ $empty -gt 0 ]]; then
+        echo "○ Removed: $empty empty patches"
+        for patch in "${empty_patches[@]}"; do
+            echo "  - $patch (already merged upstream)"
+        done
+    fi
+    
+    if [[ $failed -gt 0 ]]; then
+        echo "✗ Failed: $failed patches"
+        for patch in "${failed_patches[@]}"; do
+            echo "  - $patch (conflicts with upstream)"
+        done
+        echo
+        echo "Failed patches remain unchanged at their original commits."
+        echo "To fix: manually resolve conflicts and re-run sync."
+    fi
+    
+    echo
     echo "✓ Remote updated"
 }
 
