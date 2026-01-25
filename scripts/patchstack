@@ -524,7 +524,7 @@ build_push_refspecs() {
             verbose_echo "Processing update: ref=$ref, new=$new_sha, old=$old_sha"
 
             # Extract branch name from ref
-            local branch_name=${ref#refs/remotes/$PATCH_REMOTE/}
+            local branch_name=${ref#refs/remotes/"$PATCH_REMOTE"/}
 
             # Add refspec: local_sha:remote_ref
             refspecs+=("$new_sha:refs/heads/$branch_name")
@@ -536,7 +536,7 @@ build_push_refspecs() {
 
         elif [[ "$action" = "delete" ]]; then
             local ref=$rest
-            local branch_name=${ref#refs/remotes/$PATCH_REMOTE/}
+            local branch_name=${ref#refs/remotes/"$PATCH_REMOTE"/}
             local old_sha="${old_shas[$ref]}"
 
             verbose_echo "Processing delete: ref=$ref, old=$old_sha"
