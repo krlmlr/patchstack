@@ -14,8 +14,9 @@ RUN_ID=""
 RUN_REF_PREFIX=""
 RUN_TEMP_DIR=""
 
-# Lock file for preventing concurrent runs
-LOCK_FILE="${TMPDIR:-/tmp}/patchstack.lock"
+# Lock directory for preventing concurrent runs (local to Git repo)
+# Will be set in cmd_sync to .git/patchstack.lock
+LOCK_DIR=""
 LOCK_ACQUIRED=false
 
 # Verbosity helper - discards output for now, can be changed later
@@ -27,18 +28,34 @@ verbose_echo() {
 }
 
 # Acquire exclusive lock to prevent concurrent runs
+# Uses mkdir for portability (works on Linux and macOS)
 acquire_lock() {
-    verbose_echo "Acquiring lock at $LOCK_FILE"
+    verbose_echo "Acquiring lock at $LOCK_DIR"
     
-    # Open lock file on FD 200
-    exec 200>"$LOCK_FILE"
+    # Try to create lock directory atomically
+    # mkdir is atomic and works on all POSIX systems
+    local max_attempts=10
+    local attempt=0
     
-    # Try to acquire exclusive lock (non-blocking)
-    if ! flock -n 200; then
-        echo "ERROR: Another patchstack process is already running" >&2
-        echo "If this is incorrect, remove the lock file: $LOCK_FILE" >&2
-        exit 1
-    fi
+    while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+        attempt=$((attempt + 1))
+        if [[ $attempt -ge $max_attempts ]]; then
+            echo "ERROR: Another patchstack process is already running" >&2
+            echo "If this is incorrect, remove the lock directory: $LOCK_DIR" >&2
+            echo "" >&2
+            echo "Lock directory contents:" >&2
+            if [[ -d "$LOCK_DIR" ]]; then
+                find "$LOCK_DIR" -maxdepth 1 2>&1 | head -5 >&2 || true
+            fi
+            echo "  (cannot read lock directory)" >&2
+            exit 1
+        fi
+        # Brief sleep before retry
+        sleep 0.1
+    done
+    
+    # Store PID in lock directory for debugging
+    echo $$ > "$LOCK_DIR/pid"
     
     verbose_echo "Lock acquired"
     LOCK_ACQUIRED=true
@@ -48,8 +65,7 @@ acquire_lock() {
 release_lock() {
     verbose_echo "Releasing lock"
     if [[ "${LOCK_ACQUIRED}" == "true" ]]; then
-        flock -u 200 2>/dev/null || true
-        exec 200>&- 2>/dev/null || true
+        rm -rf "$LOCK_DIR" 2>/dev/null || true
         LOCK_ACQUIRED=false
     fi
 }
@@ -866,6 +882,9 @@ cmd_list() {
 
 # Sync command: synchronize patch stack with upstream
 cmd_sync() {
+    # Set lock directory to be local to this Git repository
+    LOCK_DIR="$(git rev-parse --git-dir)/patchstack.lock"
+    
     # Generate unique run ID for this sync operation
     # Uses timestamp + random to ensure uniqueness across concurrent runs
     RUN_ID="$(date +%Y%m%d-%H%M%S)-$$-${RANDOM}"

@@ -42,15 +42,20 @@ done
 
 echo "✓ All processes completed"
 
-# Check outputs - at least one should have failed with lock error
-success_count=0
-failure_count=0
+# Check outputs - with local locks, only one should do the actual sync work
+# The others will either be blocked (if they try during the first sync) or
+# find nothing to do (if they run after the first completes)
+synced_count=0
+no_patches_count=0
+locked_count=0
 
 for output_file in "${OUTPUTS[@]}"; do
     if grep -q "Another patchstack process is already running" "$output_file"; then
-        ((failure_count++)) || true
-    elif grep -q "Remote updated\|No patches to sync" "$output_file"; then
-        ((success_count++)) || true
+        ((locked_count++)) || true
+    elif grep -q "Synced: 2 patches" "$output_file"; then
+        ((synced_count++)) || true
+    elif grep -q "No patches to sync\|Found 0 patch branches" "$output_file"; then
+        ((no_patches_count++)) || true
     else
         echo "✗ Unexpected output in $output_file:"
         cat "$output_file"
@@ -59,11 +64,11 @@ for output_file in "${OUTPUTS[@]}"; do
     fi
 done
 
-echo "Success: $success_count, Failed (locked): $failure_count"
+echo "Synced: $synced_count, No patches: $no_patches_count, Locked: $locked_count"
 
-# Verify at least one failed due to lock
-if [[ $failure_count -lt 1 ]]; then
-    echo "✗ Expected at least one process to fail due to lock"
+# Verify exactly one process did the sync work
+if [[ $synced_count -ne 1 ]]; then
+    echo "✗ Expected exactly one process to sync patches, got $synced_count"
     echo "All outputs:"
     for i in {1..5}; do
         echo "=== Output $i ==="
@@ -72,15 +77,16 @@ if [[ $failure_count -lt 1 ]]; then
     cleanup_test_env
     exit 1
 fi
-echo "✓ At least one process correctly blocked by lock"
+echo "✓ Exactly one process synced the patches"
 
-# Verify at least one succeeded
-if [[ $success_count -lt 1 ]]; then
-    echo "✗ Expected at least one process to succeed"
+# The other 4 should either be locked or find nothing to do
+other_count=$((no_patches_count + locked_count))
+if [[ $other_count -ne 4 ]]; then
+    echo "✗ Expected 4 other processes, got $other_count"
     cleanup_test_env
     exit 1
 fi
-echo "✓ At least one process succeeded"
+echo "✓ Other processes correctly handled (locked or found nothing to sync)"
 
 # Cleanup
 cleanup_test_env

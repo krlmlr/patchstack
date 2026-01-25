@@ -1,0 +1,2 @@
+# Patchstack lock directory (local to repository)
+.git/patchstack.lock

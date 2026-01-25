@@ -8,7 +8,7 @@ Each patchstack run creates:
 
 1. **Temporary Git refs** in `refs/patchstack/runs/$RUN_ID/`
 2. **Temporary directory** in `${TMPDIR:-/tmp}/patchstack-$RUN_ID.*/`
-3. **Lock file** at `${TMPDIR:-/tmp}/patchstack.lock`
+3. **Lock directory** at `.git/patchstack.lock` (local to the repository)
 4. **Temporary branches** named `patchstack-$RUN_ID-*`
 
 The `$RUN_ID` format is: `YYYYMMDD-HHMMSS-PID-RANDOM` (e.g., `20260125-161530-12345-54321`)
@@ -34,7 +34,7 @@ Manual cleanup may be needed if:
 
 ## How to Clean Up Stale Data
 
-### 1. Clean Up Stale Lock File
+### 1. Clean Up Stale Lock Directory
 
 If you see "Another patchstack process is already running" but no process is running:
 
@@ -42,8 +42,11 @@ If you see "Another patchstack process is already running" but no process is run
 # Check if patchstack is actually running
 ps aux | grep patchstack
 
-# If no process is running, remove the lock file
-rm -f "${TMPDIR:-/tmp}/patchstack.lock"
+# If no process is running, check the lock directory
+ls -la .git/patchstack.lock
+
+# If the PID in the lock doesn't match any running process, remove it
+rm -rf .git/patchstack.lock
 ```
 
 ### 2. Clean Up Stale Git Refs
@@ -129,9 +132,9 @@ echo "Cleaning up temporary branches..."
 git branch --list 'patchstack-*' | xargs -I {} git branch -D {} || true
 echo "✓ Removed temporary branches"
 
-echo "Cleaning up lock file..."
-rm -f "${TMPDIR:-/tmp}/patchstack.lock"
-echo "✓ Removed lock file"
+echo "Cleaning up lock directory..."
+rm -rf .git/patchstack.lock
+echo "✓ Removed lock directory"
 
 echo
 echo "✓ Cleanup complete"
@@ -158,12 +161,12 @@ git for-each-ref --format='%(refname) %(creatordate:relative)' 'refs/patchstack/
 # List temporary directories with sizes
 du -sh "${TMPDIR:-/tmp}"/patchstack-* 2>/dev/null || echo "No temporary directories"
 
-# Check for lock file
-if [[ -f "${TMPDIR:-/tmp}/patchstack.lock" ]]; then
-  echo "Lock file exists"
-  lsof "${TMPDIR:-/tmp}/patchstack.lock" 2>/dev/null || echo "Not held by any process"
+# Check for lock directory
+if [[ -d ".git/patchstack.lock" ]]; then
+  echo "Lock directory exists"
+  cat ".git/patchstack.lock/pid" 2>/dev/null || echo "  (no PID file)"
 else
-  echo "No lock file"
+  echo "No lock directory"
 fi
 
 # List temporary branches
