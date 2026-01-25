@@ -49,16 +49,17 @@ git fetch -q upstream
 output=$("$PATCHSTACK" sync 2>&1)
 
 # Check that patch-alpha and patch-gamma are integrated but not patch-beta
-if ! git rev-parse refs/patchstack/tmp/main >/dev/null 2>&1; then
+main_ref=$(find_patchstack_main_ref)
+if [[ -z "$main_ref" ]]; then
     echo "ERROR: Integration ref not created"
     cleanup_test_env
     exit 1
 fi
 
-integration_sha=$(git rev-parse refs/patchstack/tmp/main)
+integration_sha=$(git rev-parse "$main_ref")
 
 # Check integration by verifying file contents
-git checkout -q refs/patchstack/tmp/main
+git checkout -q "$main_ref"
 
 # alpha should be integrated (file1.txt should contain alpha's content)
 if [[ ! -f "file1.txt" ]] || ! grep -q "alpha-change" file1.txt; then

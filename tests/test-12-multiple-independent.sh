@@ -75,11 +75,11 @@ else
 fi
 
 # Verify successful patches have temp refs
-assert_branch_exists "refs/patchstack/tmp/patch-alpha"
-assert_branch_exists "refs/patchstack/tmp/patch-beta"
+assert_patchstack_ref_exists "patch-alpha"
+assert_patchstack_ref_exists "patch-beta"
 
 # Verify failed patch does not have temp ref
-assert_branch_not_exists "refs/patchstack/tmp/patch-gamma"
+assert_patchstack_ref_not_exists "patch-gamma"
 
 # Cleanup
 cleanup_test_env

@@ -29,7 +29,7 @@ else
 fi
 
 # Verify temporary ref does not exist
-if git show-ref -q refs/patchstack/tmp/patch-empty; then
+if find_patchstack_ref "patch-empty" >/dev/null 2>&1; then
     echo "✗ Temporary ref exists but should not"
     cleanup_test_env
     exit 1

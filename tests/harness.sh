@@ -151,6 +151,60 @@ assert_branch_exists() {
     fi
 }
 
+# Helper: Find patchstack temporary ref for a branch
+# Returns the full ref path (refs/patchstack/runs/RUN_ID/BRANCH)
+find_patchstack_ref() {
+    local branch_name=$1
+    
+    # Find refs matching refs/patchstack/runs/*/BRANCH_NAME
+    local ref
+    ref=$(git for-each-ref --format='%(refname)' "refs/patchstack/runs/*/$branch_name" 2>/dev/null | head -1)
+    
+    if [[ -z "$ref" ]]; then
+        echo -e "${RED}✗ No patchstack ref found for branch: $branch_name${NC}" >&2
+        return 1
+    fi
+    
+    echo "$ref"
+}
+
+# Helper: Find patchstack integrated main ref
+# Returns the full ref path (refs/patchstack/runs/RUN_ID/main)
+find_patchstack_main_ref() {
+    # Find refs matching refs/patchstack/runs/*/main
+    local ref
+    ref=$(git for-each-ref --format='%(refname)' "refs/patchstack/runs/*/main" 2>/dev/null | head -1)
+    
+    if [[ -z "$ref" ]]; then
+        echo -e "${RED}✗ No patchstack integrated main ref found${NC}" >&2
+        return 1
+    fi
+    
+    echo "$ref"
+}
+
+# Assertion: Check if patchstack temporary ref exists for a branch
+assert_patchstack_ref_exists() {
+    local branch_name=$1
+    
+    if ! find_patchstack_ref "$branch_name" >/dev/null 2>&1; then
+        echo -e "${RED}✗ Assertion failed${NC}"
+        echo "  Patchstack temporary ref does not exist for branch: $branch_name"
+        return 1
+    fi
+}
+
+# Assertion: Check if patchstack temporary ref does NOT exist for a branch
+assert_patchstack_ref_not_exists() {
+    local branch_name=$1
+    
+    if find_patchstack_ref "$branch_name" >/dev/null 2>&1; then
+        echo -e "${RED}✗ Assertion failed${NC}"
+        echo "  Patchstack temporary ref exists but should not for branch: $branch_name"
+        return 1
+    fi
+}
+
 # Assertion: Check if branch does not exist
 assert_branch_not_exists() {
     local branch_ref=$1

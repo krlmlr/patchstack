@@ -47,7 +47,7 @@ else
 fi
 
 # Verify temporary ref does not exist (failed replay)
-if git show-ref -q refs/patchstack/tmp/patch-conflict; then
+if find_patchstack_ref "patch-conflict" >/dev/null 2>&1; then
     echo "✗ Temporary ref exists but should not (replay failed)"
     cleanup_test_env
     exit 1

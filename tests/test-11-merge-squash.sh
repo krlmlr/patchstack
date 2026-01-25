@@ -42,10 +42,13 @@ git fetch -q upstream
 output=$("$PATCHSTACK" sync 2>&1)
 
 # Verify temporary ref exists
-assert_branch_exists "refs/patchstack/tmp/patch-with-merge"
+assert_patchstack_ref_exists "patch-with-merge"
+
+# Get the actual ref
+tmp_ref=$(find_patchstack_ref "patch-with-merge")
 
 # Verify result is linear (no merge commits)
-merge_count=$(git rev-list --merges upstream/main..refs/patchstack/tmp/patch-with-merge | wc -l | tr -d ' ')
+merge_count=$(git rev-list --merges upstream/main.."$tmp_ref" | wc -l | tr -d ' ')
 if [[ "$merge_count" == "0" ]]; then
     echo "✓ No merge commits in replayed result (squashed)"
 else

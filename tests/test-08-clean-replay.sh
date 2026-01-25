@@ -31,11 +31,14 @@ git fetch -q upstream
 output=$("$PATCHSTACK" sync 2>&1)
 
 # Verify temporary ref exists
-assert_branch_exists "refs/patchstack/tmp/patch-test"
+assert_patchstack_ref_exists "patch-test"
+
+# Get the actual ref path
+tmp_ref=$(find_patchstack_ref "patch-test")
 
 # Verify it's based on new upstream
 upstream_sha=$(git rev-parse upstream/main)
-if git merge-base --is-ancestor "$upstream_sha" refs/patchstack/tmp/patch-test 2>/dev/null; then
+if git merge-base --is-ancestor "$upstream_sha" "$tmp_ref" 2>/dev/null; then
     echo "✓ Replayed branch is based on upstream/main"
 else
     echo "✗ Replayed branch is NOT based on upstream/main"
