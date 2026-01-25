@@ -27,7 +27,7 @@ setup_test_env() {
     FORK_DIR="$TEST_DIR/fork"
 
     # Create upstream repository
-    git init -q "$UPSTREAM_DIR"
+    git init -q --initial-branch=main "$UPSTREAM_DIR"
     cd "$UPSTREAM_DIR"
     git config user.email "test@patchstack.test"
     git config user.name "Test User"
