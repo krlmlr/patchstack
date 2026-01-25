@@ -208,12 +208,20 @@ create_squash_commit() {
     # Get commit message from first commit in patch
     local first_commit
     first_commit=$(git rev-list --reverse "$origin_main..$patch_remote_ref" 2>/dev/null | head -n1)
+    if [[ -z "$first_commit" ]]; then
+        echo "ERROR: Cannot find commits for $branch_name" >&2
+        return 1
+    fi
+
     local commit_msg
     commit_msg=$(git log -1 --format=%B "$first_commit" 2>/dev/null)
+    if [[ -z "$commit_msg" ]]; then
+        commit_msg="No commit message"
+    fi
 
     # Count original commits
     local commit_count
-    commit_count=$(git rev-list --count "$origin_main..$patch_remote_ref" 2>/dev/null)
+    commit_count=$(git rev-list --count "$origin_main..$patch_remote_ref" 2>/dev/null || echo "?")
 
     # Create squash commit message
     local squash_msg="Squash: $branch_name
@@ -281,24 +289,17 @@ integrate_patches() {
     local current_tip
     current_tip=$(git rev-parse "$upstream_ref")
 
-    # Get viable patches (successfully replayed)
+    # Get viable patches (successfully replayed) and sort lexicographically
     local viable_patches=()
-    local tmp_refs
-    tmp_refs=$(git for-each-ref --format='%(refname)' 'refs/patchstack/tmp/')
-
-    for ref in $tmp_refs; do
+    while IFS= read -r ref; do
+        # Skip empty lines
+        [[ -z "$ref" ]] && continue
         # Skip main ref (we're building it)
         [[ "$ref" == "$integration_ref" ]] && continue
-
         # Extract branch name
         local branch_name=${ref#refs/patchstack/tmp/}
         viable_patches+=("$branch_name")
-    done
-
-    # Sort lexicographically
-    if [[ ${#viable_patches[@]} -gt 0 ]]; then
-        IFS=$'\n' read -r -d '' -a viable_patches < <(printf '%s\n' "${viable_patches[@]}" | sort && printf '\0') || true
-    fi
+    done < <(git for-each-ref --sort=refname --format='%(refname)' 'refs/patchstack/tmp/')
 
     # Track results
     local integrated=()
