@@ -53,13 +53,14 @@ git fetch -q upstream
 output=$("$PATCHSTACK" sync 2>&1)
 
 # Check that only alpha and charlie are in integration
-if ! git rev-parse refs/patchstack/tmp/main >/dev/null 2>&1; then
+main_ref=$(find_patchstack_main_ref)
+if [[ -z "$main_ref" ]]; then
     echo "ERROR: Integration ref not created"
     cleanup_test_env
     exit 1
 fi
 
-integration_sha=$(git rev-parse refs/patchstack/tmp/main)
+integration_sha=$(git rev-parse "$main_ref")
 commit_count=$(git rev-list --count upstream/main.."$integration_sha")
 
 if [[ "$commit_count" != "2" ]]; then
@@ -79,7 +80,7 @@ fi
 echo "✓ patch-empty marked as empty"
 
 # Verify alpha and charlie are in integration by checking file contents
-git checkout -q refs/patchstack/tmp/main
+git checkout -q "$main_ref"
 
 if [[ ! -f "feature-a.txt" ]] || ! grep -q "feature-a" feature-a.txt; then
     echo "ERROR: patch-alpha should be integrated"

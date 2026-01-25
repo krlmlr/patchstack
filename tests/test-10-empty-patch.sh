@@ -42,7 +42,7 @@ else
 fi
 
 # Verify temporary ref exists (needed for generating delete action during push)
-if git show-ref -q refs/patchstack/tmp/patch-feature; then
+if find_patchstack_ref "patch-feature" >/dev/null 2>&1; then
     echo "✓ Temporary ref exists (needed for push deletion)"
 else
     echo "✗ Temporary ref should exist for empty patch (needed for push)"

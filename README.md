@@ -206,9 +206,22 @@ Patch-C changes merged upstream → Patch-C deleted, recorded in notes
 
 ## Requirements
 
-- Git 2.30+ (for atomic push and notes support)
-- Bash 4.0+ or compatible shell
+Patchstack requires:
+
+- **Git** 2.30+ (for atomic push and notes support)
+- **Bash** 4.0+ or compatible shell
+- **Standard POSIX utilities**: `mkdir`, `rm`, `sleep`, `ps`
 - SSH or HTTPS access to repositories
+
+### Platform Support
+
+- ✅ **Linux** - Fully supported
+- ✅ **macOS** - Fully supported  
+- ✅ **WSL/Cygwin** - Should work (not extensively tested)
+
+No additional dependencies are required. Patchstack uses only standard POSIX utilities available on all Unix-like systems.
+
+**Note:** Previous versions required `flock`, which is not available on macOS. The current version uses atomic `mkdir` operations for locking, which works reliably on all POSIX-compliant systems.
 
 ## Testing
 

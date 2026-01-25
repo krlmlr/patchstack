@@ -9,6 +9,16 @@ PATCH_REMOTE="${PATCH_REMOTE:-origin}"
 UPSTREAM_REMOTE="${UPSTREAM_REMOTE:-upstream}"
 MAIN_BRANCH="${MAIN_BRANCH:-main}"
 
+# Temporary resource locations (initialized in cmd_sync)
+RUN_ID=""
+RUN_REF_PREFIX=""
+RUN_TEMP_DIR=""
+
+# Lock directory for preventing concurrent runs (local to Git repo)
+# Will be set in cmd_sync to .git/patchstack.lock
+LOCK_DIR=""
+LOCK_ACQUIRED=false
+
 # Verbosity helper - discards output for now, can be changed later
 # Usage: verbose_echo "debug message"
 verbose_echo() {
@@ -16,6 +26,132 @@ verbose_echo() {
     # TODO: Add verbosity levels (e.g., PATCHSTACK_VERBOSE=1)
     :
 }
+
+# Acquire exclusive lock to prevent concurrent runs
+# Uses mkdir for portability (works on Linux and macOS)
+acquire_lock() {
+    verbose_echo "Acquiring lock at $LOCK_DIR"
+    
+    # Try to create lock directory atomically
+    # mkdir is atomic and works on all POSIX systems
+    local max_attempts=10
+    local attempt=0
+    
+    while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+        attempt=$((attempt + 1))
+        if [[ $attempt -ge $max_attempts ]]; then
+            echo "ERROR: Another patchstack process is already running" >&2
+            echo "If this is incorrect, remove the lock directory: $LOCK_DIR" >&2
+            echo "" >&2
+            echo "Lock directory contents:" >&2
+            if [[ -d "$LOCK_DIR" ]]; then
+                find "$LOCK_DIR" -maxdepth 1 2>&1 | head -5 >&2 || true
+            fi
+            echo "  (cannot read lock directory)" >&2
+            exit 1
+        fi
+        # Brief sleep before retry
+        sleep 0.1
+    done
+    
+    # Store PID in lock directory for debugging
+    echo $$ > "$LOCK_DIR/pid"
+    
+    verbose_echo "Lock acquired"
+    LOCK_ACQUIRED=true
+}
+
+# Release lock
+release_lock() {
+    verbose_echo "Releasing lock"
+    if [[ "${LOCK_ACQUIRED}" == "true" ]]; then
+        rm -rf "$LOCK_DIR" 2>/dev/null || true
+        LOCK_ACQUIRED=false
+    fi
+}
+
+# Cleanup temporary resources
+cleanup_temp_resources() {
+    verbose_echo "Cleaning up temporary resources for run $RUN_ID"
+    
+    # Clean up temporary directory
+    if [[ -n "${RUN_TEMP_DIR:-}" ]] && [[ -d "$RUN_TEMP_DIR" ]]; then
+        rm -rf "$RUN_TEMP_DIR" 2>/dev/null || true
+    fi
+    
+    # Clean up temporary branches (should already be deleted by normal flow)
+    local temp_branches
+    readarray -t temp_branches < <(git branch --list "patchstack-${RUN_ID}-*" 2>/dev/null || printf '')
+    for branch in "${temp_branches[@]}"; do
+        if [[ -n "$branch" ]]; then
+            git branch -D "$branch" 2>/dev/null || true
+        fi
+    done
+    
+    # NOTE: We intentionally do NOT clean up temporary refs immediately
+    # ($RUN_REF_PREFIX/*) to allow for debugging and test verification.
+    # Stale refs from old runs will be cleaned up by cleanup_stale_refs()
+    # which is called at the start of the next run.
+}
+
+# Cleanup stale temporary refs from old runs
+# Called at the start of each run to remove data from interrupted previous runs
+cleanup_stale_refs() {
+    verbose_echo "Cleaning up stale refs from previous runs"
+    
+    # Get all run directories
+    local all_runs
+    all_runs=$(git for-each-ref --format='%(refname)' 'refs/patchstack/runs/' 2>/dev/null | \
+               sed 's|refs/patchstack/runs/\([^/]*\)/.*|\1|' | sort -u || echo "")
+    
+    if [[ -z "$all_runs" ]]; then
+        return 0
+    fi
+    
+    # Process each old run and count deleted refs
+    local cleaned=0
+    while IFS= read -r run_id; do
+        # Skip current run
+        [[ "$run_id" == "$RUN_ID" ]] && continue
+        
+        # Get count of refs for this run before deletion
+        local run_refs
+        run_refs=$(git for-each-ref --format='%(refname)' "refs/patchstack/runs/$run_id/" 2>/dev/null | wc -l)
+        
+        # Remove all refs for this old run
+        git for-each-ref --format='%(refname)' "refs/patchstack/runs/$run_id/" 2>/dev/null | \
+          while read -r ref; do
+            git update-ref -d "$ref" 2>/dev/null || true
+        done
+        
+        # Add to count
+        cleaned=$((cleaned + run_refs))
+    done <<< "$all_runs"
+    
+    if [[ $cleaned -gt 0 ]]; then
+        verbose_echo "Cleaned up $cleaned stale refs from previous runs"
+    fi
+}
+
+# Exit handler - cleanup and release lock
+exit_handler() {
+    local exit_code=$?
+    
+    cleanup_temp_resources
+    release_lock
+    
+    if [[ $exit_code -ne 0 ]]; then
+        echo >&2
+        echo "ERROR: Patchstack exited with code $exit_code" >&2
+        echo "Temporary resources have been cleaned up" >&2
+        echo "To clean up stale data from interrupted runs, see: docs/CLEANUP.md" >&2
+    fi
+    
+    exit "$exit_code"
+}
+
+# Set up trap for cleanup
+trap exit_handler EXIT INT TERM
 
 # Discover patch branches that are descendants of origin/main
 discover_patch_branches() {
@@ -58,8 +194,8 @@ replay_patch_commits() {
     local remote_ref="refs/remotes/$PATCH_REMOTE/$branch_name"
     local upstream_ref="refs/remotes/$UPSTREAM_REMOTE/$MAIN_BRANCH"
     local origin_main="refs/remotes/$PATCH_REMOTE/$MAIN_BRANCH"
-    local tmp_ref="refs/patchstack/tmp/$branch_name"
-    local tmp_branch="patchstack-tmp-$branch_name"
+    local tmp_ref="$RUN_REF_PREFIX/$branch_name"
+    local tmp_branch="patchstack-${RUN_ID}-tmp-$branch_name"
 
     # Check if branch has commits beyond origin/main
     if [[ "$(git rev-parse "$remote_ref")" == "$(git rev-parse "$origin_main")" ]]; then
@@ -216,7 +352,7 @@ create_squash_commit() {
     current_branch=$(git symbolic-ref --short HEAD 2>/dev/null || echo "")
     local current_head
     current_head=$(git rev-parse HEAD 2>/dev/null)
-    local tmp_branch="patchstack-integrate-$branch_name"
+    local tmp_branch="patchstack-${RUN_ID}-integrate-$branch_name"
 
     # Create integration branch from parent ref
     verbose_echo "Creating integration branch $tmp_branch from $parent_ref"
@@ -230,7 +366,8 @@ create_squash_commit() {
     fi
 
     # Attempt squash merge from replayed patch (uses git's default squash message)
-    if ! git merge --squash "$tmp_ref" >/dev/null 2>&1; then
+    # Override merge.ff to ensure we get a commit (not a merge commit)
+    if ! git -c merge.ff=true merge --squash "$tmp_ref" >/dev/null 2>&1; then
         # Conflict during integration
         git merge --abort >/dev/null 2>&1 || true
         git reset --hard >/dev/null 2>&1 || true
@@ -245,7 +382,8 @@ create_squash_commit() {
     fi
 
     # Create the squash commit with git's default message
-    if ! git commit --no-edit >/dev/null 2>&1; then
+    # Override merge.ff to ensure consistent behavior
+    if ! git -c merge.ff=true commit --no-edit >/dev/null 2>&1; then
         # This can happen if there are no changes (shouldn't happen since we already replayed)
         git reset --hard >/dev/null 2>&1 || true
         # Restore original position
@@ -277,7 +415,7 @@ create_squash_commit() {
 # Build new main by integrating patches sequentially
 integrate_patches() {
     local upstream_ref="refs/remotes/$UPSTREAM_REMOTE/$MAIN_BRANCH"
-    local integration_ref="refs/patchstack/tmp/main"
+    local integration_ref="$RUN_REF_PREFIX/main"
 
     # Start from upstream/main
     local current_tip
@@ -291,9 +429,9 @@ integrate_patches() {
         # Skip main ref (we're building it)
         [[ "$ref" == "$integration_ref" ]] && continue
         # Extract branch name
-        local branch_name=${ref#refs/patchstack/tmp/}
+        local branch_name=${ref#"$RUN_REF_PREFIX/"}
         viable_patches+=("$branch_name")
-    done < <(git for-each-ref --sort=refname --format='%(refname)' 'refs/patchstack/tmp/')
+    done < <(git for-each-ref --sort=refname --format='%(refname)' "$RUN_REF_PREFIX/")
 
     # Track results
     local integrated=()
@@ -302,7 +440,7 @@ integrate_patches() {
     echo "Integrating ${#viable_patches[@]} viable patches..." >&2
 
     for branch_name in "${viable_patches[@]}"; do
-        local tmp_ref="refs/patchstack/tmp/$branch_name"
+        local tmp_ref="$RUN_REF_PREFIX/$branch_name"
 
         # Skip empty patches (tree equals upstream)
         local tmp_tree
@@ -354,7 +492,7 @@ integrate_patches() {
 # Calculate which refs need updating based on integration results
 # Takes integration results as arguments (integrated:branch or failed:branch:reason)
 calculate_ref_updates() {
-    local integration_main="refs/patchstack/tmp/main"
+    local integration_main="$RUN_REF_PREFIX/main"
     
     # Check if integration main exists (it won't if there are no viable patches)
     if git rev-parse "$integration_main" &>/dev/null 2>&1; then
@@ -377,7 +515,7 @@ calculate_ref_updates() {
     # (Don't use discover_patch_branches here because origin/main has been updated
     # and patches are based on upstream, not on the new integrated main)
     local tmp_refs
-    readarray -t tmp_refs < <(git for-each-ref --format='%(refname)' 'refs/patchstack/tmp/')
+    readarray -t tmp_refs < <(git for-each-ref --format='%(refname)' "$RUN_REF_PREFIX/")
 
     verbose_echo "calculate_ref_updates: found ${#tmp_refs[@]} temp refs"
 
@@ -385,8 +523,8 @@ calculate_ref_updates() {
         # Skip the main ref
         [[ "$tmp_ref" == "$integration_main" ]] && continue
 
-        # Extract branch name from refs/patchstack/tmp/BRANCH
-        local branch=${tmp_ref#refs/patchstack/tmp/}
+        # Extract branch name from $RUN_REF_PREFIX/BRANCH
+        local branch=${tmp_ref#"$RUN_REF_PREFIX/"}
         local remote_ref="refs/remotes/$PATCH_REMOTE/$branch"
 
         verbose_echo "calculate_ref_updates: checking branch=$branch, tmp_ref=$tmp_ref"
@@ -744,13 +882,25 @@ cmd_list() {
 
 # Sync command: synchronize patch stack with upstream
 cmd_sync() {
-    echo "🚀 Starting patchstack sync..."
+    # Set lock directory to be local to this Git repository
+    LOCK_DIR="$(git rev-parse --git-dir)/patchstack.lock"
+    
+    # Generate unique run ID for this sync operation
+    # Uses timestamp + random to ensure uniqueness across concurrent runs
+    RUN_ID="$(date +%Y%m%d-%H%M%S)-$$-${RANDOM}"
+    RUN_REF_PREFIX="refs/patchstack/runs/$RUN_ID"
+    
+    # Acquire lock first to prevent concurrent runs
+    acquire_lock
+    
+    # Clean up stale refs from previous runs (after acquiring lock, before main sync operations)
+    cleanup_stale_refs
+    
+    # Create run-specific temporary directory
+    RUN_TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/patchstack-${RUN_ID}.XXXXXX")"
+    
+    echo "🚀 Starting patchstack sync (run: $RUN_ID)..."
     echo
-
-    # Clean up any stale tmp refs from previous runs
-    git for-each-ref --format='%(refname)' 'refs/patchstack/tmp/' | while read -r ref; do
-        git update-ref -d "$ref" >/dev/null 2>&1 || true
-    done
 
     # Phase 1: Discovery
     echo "🔍 Phase 1: Discovering patch branches"
@@ -793,8 +943,7 @@ cmd_sync() {
     fi
 
     # Capture ref state BEFORE Phase 4 updates them (for force-with-lease)
-    local ref_state_file
-    ref_state_file="$(mktemp "${TMPDIR:-/tmp}/patchstack-ref-state.XXXXXX")"
+    local ref_state_file="$RUN_TEMP_DIR/ref-state"
     capture_ref_state "${integration_results[@]}" > "$ref_state_file"
 
     # Phase 4: Update refs (always run to handle empty patches)

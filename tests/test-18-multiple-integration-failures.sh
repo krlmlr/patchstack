@@ -47,13 +47,14 @@ git fetch -q upstream
 output=$("$PATCHSTACK" sync 2>&1)
 
 # Only patch-a should integrate (first in lexicographic order)
-if ! git rev-parse refs/patchstack/tmp/main >/dev/null 2>&1; then
+main_ref=$(find_patchstack_main_ref)
+if [[ -z "$main_ref" ]]; then
     echo "ERROR: Integration ref not created"
     cleanup_test_env
     exit 1
 fi
 
-integration_sha=$(git rev-parse refs/patchstack/tmp/main)
+integration_sha=$(git rev-parse "$main_ref")
 commit_count=$(git rev-list --count upstream/main.."$integration_sha")
 
 if [[ "$commit_count" != "1" ]]; then
@@ -64,7 +65,7 @@ fi
 echo "✓ Integration has 1 commit (only patch-a)"
 
 # Verify patch-a is in integration by checking file content
-git checkout -q refs/patchstack/tmp/main
+git checkout -q "$main_ref"
 if [[ ! -f "conflict.txt" ]] || ! grep -q "version-a" conflict.txt; then
     echo "ERROR: patch-a should be integrated"
     cleanup_test_env

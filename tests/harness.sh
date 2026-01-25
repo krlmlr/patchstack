@@ -31,6 +31,9 @@ setup_test_env() {
     cd "$UPSTREAM_DIR"
     git config user.email "test@patchstack.test"
     git config user.name "Test User"
+    # Override problematic global configs that affect test behavior
+    git config push.default simple
+    git config merge.ff true
     echo "# Upstream Repository" > README.md
     git add README.md
     git commit -q -m "Initial commit"
@@ -40,6 +43,9 @@ setup_test_env() {
     cd "$FORK_DIR"
     git config user.email "test@patchstack.test"
     git config user.name "Test User"
+    # Override problematic global configs that affect test behavior
+    git config push.default simple
+    git config merge.ff true
 
     # Set up remotes: rename origin to upstream, add origin pointing to self
     git remote rename origin upstream
@@ -147,6 +153,69 @@ assert_branch_exists() {
     if ! git show-ref -q "$branch_ref"; then
         echo -e "${RED}✗ Assertion failed${NC}"
         echo "  Branch does not exist: $branch_ref"
+        return 1
+    fi
+}
+
+# Helper: Find patchstack temporary ref for a branch
+# Returns the full ref path (refs/patchstack/runs/RUN_ID/BRANCH)
+find_patchstack_ref() {
+    local branch_name=$1
+    
+    # Find refs matching refs/patchstack/runs/*/BRANCH_NAME
+    local refs
+    refs=$(git for-each-ref --format='%(refname)' "refs/patchstack/runs/*/$branch_name" 2>/dev/null)
+    
+    if [[ -z "$refs" ]]; then
+        echo -e "${RED}✗ No patchstack ref found for branch: $branch_name${NC}" >&2
+        return 1
+    fi
+    
+    # Check if multiple refs exist (indicates cleanup issue)
+    local ref_count
+    ref_count=$(echo "$refs" | wc -l)
+    if [[ $ref_count -gt 1 ]]; then
+        echo -e "${RED}✗ Warning: Multiple patchstack refs found for branch $branch_name (found $ref_count)${NC}" >&2
+        echo -e "${RED}   This may indicate stale refs from interrupted runs${NC}" >&2
+    fi
+    
+    # Return the first one
+    echo "$refs" | head -1
+}
+
+# Helper: Find patchstack integrated main ref
+# Returns the full ref path (refs/patchstack/runs/RUN_ID/main)
+find_patchstack_main_ref() {
+    # Find refs matching refs/patchstack/runs/*/main
+    local ref
+    ref=$(git for-each-ref --format='%(refname)' "refs/patchstack/runs/*/main" 2>/dev/null | head -1)
+    
+    if [[ -z "$ref" ]]; then
+        echo -e "${RED}✗ No patchstack integrated main ref found${NC}" >&2
+        return 1
+    fi
+    
+    echo "$ref"
+}
+
+# Assertion: Check if patchstack temporary ref exists for a branch
+assert_patchstack_ref_exists() {
+    local branch_name=$1
+    
+    if ! find_patchstack_ref "$branch_name" >/dev/null 2>&1; then
+        echo -e "${RED}✗ Assertion failed${NC}"
+        echo "  Patchstack temporary ref does not exist for branch: $branch_name"
+        return 1
+    fi
+}
+
+# Assertion: Check if patchstack temporary ref does NOT exist for a branch
+assert_patchstack_ref_not_exists() {
+    local branch_name=$1
+    
+    if find_patchstack_ref "$branch_name" >/dev/null 2>&1; then
+        echo -e "${RED}✗ Assertion failed${NC}"
+        echo "  Patchstack temporary ref exists but should not for branch: $branch_name"
         return 1
     fi
 }

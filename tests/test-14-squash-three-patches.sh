@@ -33,7 +33,8 @@ git fetch -q upstream
 "$PATCHSTACK" sync >/dev/null 2>&1
 
 # Check integration ref exists
-if ! git rev-parse refs/patchstack/tmp/main >/dev/null 2>&1; then
+main_ref=$(find_patchstack_main_ref)
+if [[ -z "$main_ref" ]]; then
     echo "ERROR: Integration ref not created"
     cleanup_test_env
     exit 1
@@ -42,7 +43,7 @@ echo "✓ Integration ref created"
 
 # Check integration ref has 3 commits beyond upstream
 upstream_sha=$(git rev-parse upstream/main)
-integration_sha=$(git rev-parse refs/patchstack/tmp/main)
+integration_sha=$(git rev-parse "$main_ref")
 commit_count=$(git rev-list --count "$upstream_sha..$integration_sha")
 
 if [[ "$commit_count" != "3" ]]; then
@@ -53,7 +54,7 @@ fi
 echo "✓ Integration has 3 commits beyond upstream"
 
 # Check that files from all patches exist in integration
-git checkout -q refs/patchstack/tmp/main
+git checkout -q "$main_ref"
 
 if [[ ! -f "file-patch-alpha.txt" ]]; then
     echo "ERROR: Missing file-patch-alpha.txt"

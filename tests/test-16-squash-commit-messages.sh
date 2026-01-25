@@ -39,14 +39,15 @@ git fetch -q upstream
 "$PATCHSTACK" sync >/dev/null 2>&1
 
 # Check integration ref exists
-if ! git rev-parse refs/patchstack/tmp/main >/dev/null 2>&1; then
+main_ref=$(find_patchstack_main_ref)
+if [[ -z "$main_ref" ]]; then
     echo "ERROR: Integration ref not created"
     cleanup_test_env
     exit 1
 fi
 
 # Check squash commit message uses git's default format
-integration_sha=$(git rev-parse refs/patchstack/tmp/main)
+integration_sha=$(git rev-parse "$main_ref")
 squash_msg=$(git log -1 --format=%B "$integration_sha")
 
 # Git's default squash message contains "Squashed commit of the following:"
