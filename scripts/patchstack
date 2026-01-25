@@ -9,6 +9,12 @@ PATCH_REMOTE="${PATCH_REMOTE:-origin}"
 UPSTREAM_REMOTE="${UPSTREAM_REMOTE:-upstream}"
 MAIN_BRANCH="${MAIN_BRANCH:-main}"
 
+# Branch name to track the last synced upstream/main
+# This is used to discover patch branches (descendants of this base)
+# Stored as a branch in origin (refs/heads/patchstack/upstream-base)
+# and fetched as refs/remotes/origin/patchstack/upstream-base
+UPSTREAM_BASE_BRANCH="patchstack/upstream-base"
+
 # Temporary resource locations (initialized in cmd_sync)
 RUN_ID=""
 RUN_REF_PREFIX=""
@@ -153,28 +159,78 @@ exit_handler() {
 # Set up trap for cleanup
 trap exit_handler EXIT INT TERM
 
-# Discover patch branches that are descendants of origin/main
+# Get the recorded upstream base (last synced upstream/main)
+# On first sync (no recorded base), falls back to the merge-base of upstream/main and origin/main
+# This handles the case where origin/main has diverged from upstream before first patchstack sync
+get_upstream_base() {
+    # Try to get from origin first (the authoritative source)
+    # The branch patchstack/upstream-base is fetched as refs/remotes/origin/patchstack/upstream-base
+    local remote_base="refs/remotes/$PATCH_REMOTE/$UPSTREAM_BASE_BRANCH"
+    if git rev-parse "$remote_base" &>/dev/null 2>&1; then
+        git rev-parse "$remote_base"
+        return 0
+    fi
+    
+    # Fall back to merge-base of upstream/main and origin/main (first sync scenario)
+    # This handles cases where origin/main has commits not in upstream
+    local upstream_sha origin_sha
+    upstream_sha=$(git rev-parse "refs/remotes/$UPSTREAM_REMOTE/$MAIN_BRANCH" 2>/dev/null) || {
+        echo "Error: Cannot find upstream/$MAIN_BRANCH" >&2
+        return 1
+    }
+    origin_sha=$(git rev-parse "refs/remotes/$PATCH_REMOTE/$MAIN_BRANCH" 2>/dev/null) || {
+        echo "Error: Cannot find origin/$MAIN_BRANCH" >&2
+        return 1
+    }
+    
+    # If they're the same, just return it
+    if [[ "$upstream_sha" == "$origin_sha" ]]; then
+        echo "$upstream_sha"
+        return 0
+    fi
+    
+    # Find common ancestor
+    git merge-base "$upstream_sha" "$origin_sha"
+}
+
+# Discover patch branches that are descendants of the recorded upstream base
+# A patch branch is any origin branch (excluding main, HEAD, and patchstack refs) that:
+# 1. Is a descendant of the recorded upstream base
+# 2. Has commits beyond that base
 discover_patch_branches() {
-    local base_ref="refs/remotes/$PATCH_REMOTE/$MAIN_BRANCH"
     local base_sha
-    base_sha=$(git rev-parse "$base_ref" 2>/dev/null) || {
-        echo "Error: Cannot find $base_ref" >&2
+    base_sha=$(get_upstream_base) || {
+        echo "Error: Cannot determine upstream base" >&2
         return 1
     }
 
-    # Collect branches that are descendants of the base
+    local origin_main_ref="refs/remotes/$PATCH_REMOTE/$MAIN_BRANCH"
+
+    # Collect branches that are descendants of the base with commits beyond it
     local branches=()
     while IFS= read -r ref; do
-        # Skip main branch itself
-        [[ "$ref" == "$base_ref" ]] && continue
+        # Skip main branch
+        [[ "$ref" == "$origin_main_ref" ]] && continue
 
         # Skip HEAD
         [[ "$ref" == "refs/remotes/$PATCH_REMOTE/HEAD" ]] && continue
 
-        # Check if this branch is a descendant of base
+        # Skip patchstack internal refs
+        [[ "$ref" == refs/remotes/"$PATCH_REMOTE"/patchstack/* ]] && continue
+
         local branch_sha
         branch_sha=$(git rev-parse "$ref")
-        if git merge-base --is-ancestor "$base_sha" "$branch_sha" 2>/dev/null; then
+
+        # Check if branch is a descendant of the base
+        if ! git merge-base --is-ancestor "$base_sha" "$branch_sha" 2>/dev/null; then
+            continue
+        fi
+
+        # Check if branch has commits beyond base
+        local commit_count
+        commit_count=$(git rev-list --count "$base_sha..$branch_sha" 2>/dev/null) || continue
+        
+        if [[ "$commit_count" -gt 0 ]]; then
             # Extract branch name (remove refs/remotes/origin/ prefix)
             local branch_name=${ref#refs/remotes/"$PATCH_REMOTE"/}
             branches+=("$branch_name")
@@ -193,19 +249,27 @@ replay_patch_commits() {
     local branch_name=$1
     local remote_ref="refs/remotes/$PATCH_REMOTE/$branch_name"
     local upstream_ref="refs/remotes/$UPSTREAM_REMOTE/$MAIN_BRANCH"
-    local origin_main="refs/remotes/$PATCH_REMOTE/$MAIN_BRANCH"
     local tmp_ref="$RUN_REF_PREFIX/$branch_name"
     local tmp_branch="patchstack-${RUN_ID}-tmp-$branch_name"
 
-    # Check if branch has commits beyond origin/main
-    if [[ "$(git rev-parse "$remote_ref")" == "$(git rev-parse "$origin_main")" ]]; then
-        echo "WARNING: $branch_name has no commits beyond main" >&2
+    local branch_sha
+    branch_sha=$(git rev-parse "$remote_ref")
+    local upstream_sha
+    upstream_sha=$(git rev-parse "$upstream_ref")
+
+    # Get the recorded upstream base (what patches are currently based on)
+    local base_sha
+    base_sha=$(get_upstream_base)
+
+    # Check if branch has commits beyond base
+    if [[ "$branch_sha" == "$base_sha" ]]; then
+        echo "WARNING: $branch_name has no commits beyond base" >&2
         return 2
     fi
 
-    # Get list of commits to replay (between origin/main and patch branch)
+    # Get list of commits to replay (between base and patch branch)
     local commits
-    if ! commits=$(git rev-list --reverse "$origin_main..$remote_ref" 2>&1); then
+    if ! commits=$(git rev-list --reverse "$base_sha..$remote_ref" 2>&1); then
         echo "ERROR: Cannot list commits for $branch_name" >&2
         return 1
     fi
@@ -214,6 +278,25 @@ replay_patch_commits() {
     if [[ -z "$commits" ]]; then
         echo "WARNING: $branch_name has no commits to replay" >&2
         return 2
+    fi
+
+    # Check if patch is already based on current upstream/main (no rebase needed)
+    if [[ "$base_sha" == "$upstream_sha" ]]; then
+        # Patch is already correctly based on upstream/main
+        # Just create the tmp ref pointing to the current branch tip
+        git update-ref "$tmp_ref" "$branch_sha" >/dev/null 2>&1
+        
+        # Check if patch is empty (tree equals upstream tree)
+        local branch_tree
+        local upstream_tree
+        branch_tree=$(git rev-parse "$branch_sha^{tree}")
+        upstream_tree=$(git rev-parse "$upstream_sha^{tree}")
+        
+        if [[ "$branch_tree" == "$upstream_tree" ]]; then
+            return 4  # empty
+        fi
+        
+        return 0  # success, no rebase needed
     fi
 
     # Create temporary branch starting from upstream/main
@@ -863,6 +946,39 @@ push_notes() {
     fi
 }
 
+# Update and push the upstream-base branch
+# This records the current upstream/main as the base for future syncs
+update_upstream_base() {
+    local upstream_sha
+    upstream_sha=$(git rev-parse "refs/remotes/$UPSTREAM_REMOTE/$MAIN_BRANCH")
+    
+    echo "Updating upstream-base reference..."
+    
+    # Get the old value for force-with-lease (if it exists)
+    local old_sha=""
+    local remote_base="refs/remotes/$PATCH_REMOTE/$UPSTREAM_BASE_BRANCH"
+    if git rev-parse "$remote_base" &>/dev/null 2>&1; then
+        old_sha=$(git rev-parse "$remote_base")
+    fi
+    
+    # Push to origin as a branch (refs/heads/patchstack/upstream-base)
+    # This will be fetched automatically on next git fetch
+    local push_cmd=(git push "$PATCH_REMOTE" "$upstream_sha:refs/heads/$UPSTREAM_BASE_BRANCH")
+    
+    # Add force-with-lease if we have an old value (prevents race conditions)
+    if [[ -n "$old_sha" ]]; then
+        push_cmd+=("--force-with-lease=refs/heads/$UPSTREAM_BASE_BRANCH:$old_sha")
+    fi
+    
+    if "${push_cmd[@]}" 2>&1; then
+        echo "✓ Upstream-base updated to $(git rev-parse --short "$upstream_sha")"
+        return 0
+    else
+        echo "⚠ Upstream-base push failed (non-fatal)"
+        return 0  # Don't fail sync if this fails
+    fi
+}
+
 # List command: show all patch branches
 cmd_list() {
     local patches
@@ -1017,6 +1133,9 @@ cmd_sync() {
 
     # Clean up ref state file
     rm -f "$ref_state_file"
+
+    # Update upstream-base reference (records what patches are now based on)
+    update_upstream_base
 
     # Push notes (non-fatal)
     push_notes
