@@ -377,7 +377,7 @@ record_notes() {
     local new_sha=$3
     local status=$4
 
-    local branch_name=${ref#refs/remotes/$PATCH_REMOTE/}
+    local branch_name=${ref#refs/remotes/"$PATCH_REMOTE"/}
     local timestamp
     timestamp=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
 
@@ -515,8 +515,8 @@ cmd_sync() {
         # Still need to handle empty patches and update refs
     else
         echo "📦 Phase 3: Integrating patches into new main"
-        local integration_results
-        readarray -t integration_results < <(integrate_patches)
+        # Capture integration results but don't use them (output goes to stderr)
+        integrate_patches > /dev/null
         echo
     fi
 
