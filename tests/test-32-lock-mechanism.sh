@@ -10,6 +10,9 @@ source "$SCRIPT_DIR/harness.sh"
 setup_test_env
 cd "$FORK_DIR"
 
+# Create temp log file in test directory
+SYNC_LOG="$TEST_DIR/sync1.log"
+
 # Create real remote
 REMOTE_DIR="$TEST_DIR/remote"
 git clone --bare "$FORK_DIR" "$REMOTE_DIR"
@@ -36,7 +39,7 @@ advance_upstream 1
 git fetch -q upstream
 
 # Start first sync in background and capture its output
-"$PATCHSTACK" sync > /tmp/sync1-$$.log 2>&1 &
+"$PATCHSTACK" sync > "$SYNC_LOG" 2>&1 &
 FIRST_PID=$!
 
 # Give it a moment to acquire the lock and get past discovery
@@ -45,7 +48,7 @@ sleep 1
 # Check that first process is still running
 if ! ps -p "$FIRST_PID" > /dev/null 2>&1; then
     echo "✗ First sync completed too quickly for test"
-    cat /tmp/sync1-$$.log || true
+    cat "$SYNC_LOG" || true
     cleanup_test_env
     exit 1
 fi
@@ -78,7 +81,7 @@ wait "$FIRST_PID" 2>/dev/null || first_exit=$?
 # Check that first sync succeeded
 if [[ "${first_exit:-0}" -ne 0 ]]; then
     echo "First sync failed with exit code ${first_exit}"
-    cat /tmp/sync1-$$.log || true
+    cat "$SYNC_LOG" || true
 fi
 
 # Verify we can run sync again after first completes
@@ -91,7 +94,6 @@ else
 fi
 
 # Cleanup
-rm -f /tmp/sync1-$$.log
 cleanup_test_env
 
 echo "✓ Test passed: lock mechanism works"
