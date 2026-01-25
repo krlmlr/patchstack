@@ -352,6 +352,7 @@ integrate_patches() {
 }
 
 # Calculate which refs need updating based on integration results
+# Takes integration results as arguments (integrated:branch or failed:branch:reason)
 calculate_ref_updates() {
     local integration_main="refs/patchstack/tmp/main"
     
@@ -362,6 +363,15 @@ calculate_ref_updates() {
         # Update main
         echo "update:refs/remotes/$PATCH_REMOTE/$MAIN_BRANCH:$new_main_sha"
     fi
+
+    # Build a set of integrated patches for quick lookup
+    declare -A integrated_set
+    for result in "$@"; do
+        if [[ "$result" == integrated:* ]]; then
+            local branch=${result#integrated:}
+            integrated_set["$branch"]=1
+        fi
+    done
 
     # Process each replayed patch by looking at temporary refs
     # (Don't use discover_patch_branches here because origin/main has been updated
@@ -394,12 +404,15 @@ calculate_ref_updates() {
             # Empty patch - delete the ref
             verbose_echo "calculate_ref_updates: $branch is empty, deleting"
             echo "delete:$remote_ref"
-        else
-            # Update to point to replayed version
+        elif [[ -n "${integrated_set[$branch]:-}" ]]; then
+            # Only update if patch was successfully integrated
             local new_sha
             new_sha=$(git rev-parse "$tmp_ref")
             verbose_echo "calculate_ref_updates: $branch updated to $new_sha"
             echo "update:$remote_ref:$new_sha"
+        else
+            # Patch failed integration - leave unchanged
+            verbose_echo "calculate_ref_updates: $branch failed integration, leaving unchanged"
         fi
     done
 }
@@ -436,9 +449,10 @@ New SHA: $new_sha
 }
 
 # Apply all calculated ref updates atomically
+# Takes integration results as arguments
 apply_ref_updates() {
     local updates
-    readarray -t updates < <(calculate_ref_updates)
+    readarray -t updates < <(calculate_ref_updates "$@")
 
     if [[ ${#updates[@]} -eq 0 ]]; then
         echo "No ref updates needed"
@@ -511,9 +525,10 @@ apply_ref_updates() {
 
 # Capture the current state of remote tracking refs before updating
 # Output format: ref:old_sha
+# Takes integration results as arguments
 capture_ref_state() {
     local updates
-    readarray -t updates < <(calculate_ref_updates)
+    readarray -t updates < <(calculate_ref_updates "$@")
 
     for update in "${updates[@]}"; do
         local action=${update%%:*}
@@ -534,15 +549,16 @@ capture_ref_state() {
 }
 
 # Build refspec list for atomic push with force-with-lease
-# Takes the pre-update ref state as input via a file path
+# Takes the pre-update ref state file path and integration results as input
 build_push_refspecs() {
     local ref_state_file=$1
+    shift  # Remove first argument, rest are integration results
     local refspecs=()
     local lease_options=()
 
     # Get all updated refs from previous phase
     local updates
-    readarray -t updates < <(calculate_ref_updates)
+    readarray -t updates < <(calculate_ref_updates "$@")
 
     verbose_echo "calculate_ref_updates returned ${#updates[@]} updates:"
     for u in "${updates[@]}"; do
@@ -617,12 +633,14 @@ build_push_refspecs() {
 }
 
 # Executes the atomic push with all refspecs
+# Takes ref state file path and integration results as arguments
 push_refs() {
     local ref_state_file=$1
+    shift  # Remove first argument, rest are integration results
     echo "Preparing push..."
 
     local pushspecs
-    readarray -t pushspecs < <(build_push_refspecs "$ref_state_file")
+    readarray -t pushspecs < <(build_push_refspecs "$ref_state_file" "$@")
 
     if [[ ${#pushspecs[@]} -eq 0 ]]; then
         echo "No changes to push"
@@ -762,28 +780,29 @@ cmd_sync() {
     echo
 
     # Phase 3: Integration
+    local integration_results=()
     if [[ $viable -eq 0 ]]; then
         echo "📦 Phase 3: No patches to integrate"
         echo
         # Still need to handle empty patches and update refs
     else
         echo "📦 Phase 3: Integrating patches into new main"
-        # Capture integration results but don't use them (output goes to stderr)
-        integrate_patches > /dev/null
+        # Capture integration results for summary
+        readarray -t integration_results < <(integrate_patches)
         echo
     fi
 
     # Capture ref state BEFORE Phase 4 updates them (for force-with-lease)
     local ref_state_file
     ref_state_file="$(mktemp "${TMPDIR:-/tmp}/patchstack-ref-state.XXXXXX")"
-    capture_ref_state > "$ref_state_file"
+    capture_ref_state "${integration_results[@]}" > "$ref_state_file"
 
     # Phase 4: Update refs (always run to handle empty patches)
     echo "🔄 Phase 4: Updating local refs"
     
     # Check if we have viable patches or only need to clean up
     if [[ $viable -gt 0 ]]; then
-        if ! apply_ref_updates; then
+        if ! apply_ref_updates "${integration_results[@]}"; then
             echo "ERROR: Failed to update refs"
             return 1
         fi
@@ -840,7 +859,7 @@ cmd_sync() {
 
     # Phase 5: Push to remote
     echo "🚀 Phase 5: Pushing to $PATCH_REMOTE"
-    if ! push_refs "$ref_state_file"; then
+    if ! push_refs "$ref_state_file" "${integration_results[@]}"; then
         echo "ERROR: Push failed"
         echo "Local refs updated but remote unchanged"
         rm -f "$ref_state_file"
@@ -862,28 +881,41 @@ cmd_sync() {
 
     # Count different outcomes
     local success=0
-    local failed=0
+    local failed_count=0
     local empty=0
     local failed_patches=()
     local empty_patches=()
 
+    # Build a set of integration failures
+    declare -A integration_failures
+    for result in "${integration_results[@]}"; do
+        if [[ "$result" == failed:* ]]; then
+            local branch_and_reason=${result#failed:}
+            local branch=${branch_and_reason%%:*}
+            local reason=${branch_and_reason#*:}
+            integration_failures["$branch"]="$reason"
+        fi
+    done
+
+    # Process replay results, taking integration into account
     for result in "${replay_results[@]}"; do
         local patch=${result%%:*}
         local status=${result#*:}
         
-        case "$status" in
-            success)
-                ((success++)) || true
-                ;;
-            empty)
-                ((empty++)) || true
-                empty_patches+=("$patch")
-                ;;
-            conflict|invalid|no-changes)
-                ((failed++)) || true
-                failed_patches+=("$patch")
-                ;;
-        esac
+        # Check if this patch failed integration
+        if [[ -n "${integration_failures[$patch]:-}" ]]; then
+            ((failed_count++)) || true
+            failed_patches+=("$patch (${integration_failures[$patch]})")
+        elif [[ "$status" == "success" ]]; then
+            ((success++)) || true
+        elif [[ "$status" == "empty" ]]; then
+            ((empty++)) || true
+            empty_patches+=("$patch")
+        else
+            # Replay failure (conflict, invalid, etc)
+            ((failed_count++)) || true
+            failed_patches+=("$patch ($status)")
+        fi
     done
 
     # Show summary
@@ -898,10 +930,10 @@ cmd_sync() {
         done
     fi
     
-    if [[ $failed -gt 0 ]]; then
-        echo "✗ Failed: $failed patches"
-        for patch in "${failed_patches[@]}"; do
-            echo "  - $patch (conflicts with upstream)"
+    if [[ $failed_count -gt 0 ]]; then
+        echo "✗ Failed: $failed_count patches"
+        for patch_info in "${failed_patches[@]}"; do
+            echo "  - $patch_info"
         done
         echo
         echo "Failed patches remain unchanged at their original commits."
