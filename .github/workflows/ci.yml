@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Setup Git
+        run: |
+          git config --global user.name "CI Bot"
+          git config --global user.email "ci@example.com"
+      
+      - name: Check script syntax
+        run: |
+          bash -n scripts/patchstack
+      
+      - name: Lint with shellcheck
+        run: |
+          shellcheck scripts/patchstack
+      
+      - name: Run test suite
+        run: |
+          bash ./tests/run-all-tests.sh
+      
+      - name: Show test results summary
+        if: always()
+        run: |
+          echo "Test suite completed"
