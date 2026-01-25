@@ -56,9 +56,9 @@ for phase in "1.3" "1.4" "1.5" "1.6" "1.7" "1.8"; do
     title="${TITLES[$phase]}"
     summary="${SUMMARIES[$phase]}"
     plan_file="${PHASES[$phase]}"
-    
+
     echo "Creating issue: $title"
-    
+
     # Create issue body
     body=$(cat <<EOF
 ## Summary
@@ -83,17 +83,15 @@ See the detailed implementation plan: \`plan/$plan_file\`
 phase-${phase/./}, milestone-1
 EOF
 )
-    
+
     # Create the issue
     gh issue create \
         --title "$title" \
-        --body "$body" \
-        --label "enhancement,phase-${phase/./-}" \
-        --assignee "@me"
-    
+        --body "$body"
+
     echo "✓ Created issue for $phase"
     echo
-    
+
     # Small delay to avoid rate limiting
     sleep 1
 done
