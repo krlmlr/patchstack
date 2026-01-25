@@ -9,17 +9,14 @@ PATCH_REMOTE="${PATCH_REMOTE:-origin}"
 UPSTREAM_REMOTE="${UPSTREAM_REMOTE:-upstream}"
 MAIN_BRANCH="${MAIN_BRANCH:-main}"
 
-# Generate unique run ID for this invocation
-# Uses timestamp + random to ensure uniqueness across concurrent runs
-RUN_ID="$(date +%Y%m%d-%H%M%S)-$$-${RANDOM}"
-
-# Temporary resource locations (unique per run)
-RUN_REF_PREFIX="refs/patchstack/runs/$RUN_ID"
+# Temporary resource locations (initialized in cmd_sync)
+RUN_ID=""
+RUN_REF_PREFIX=""
 RUN_TEMP_DIR=""
 
 # Lock file for preventing concurrent runs
 LOCK_FILE="${TMPDIR:-/tmp}/patchstack.lock"
-LOCK_FD=200
+LOCK_ACQUIRED=false
 
 # Verbosity helper - discards output for now, can be changed later
 # Usage: verbose_echo "debug message"
@@ -34,24 +31,26 @@ acquire_lock() {
     verbose_echo "Acquiring lock at $LOCK_FILE"
     
     # Open lock file on FD 200
-    eval "exec $LOCK_FD>\"$LOCK_FILE\""
+    exec 200>"$LOCK_FILE"
     
     # Try to acquire exclusive lock (non-blocking)
-    if ! flock -n "$LOCK_FD"; then
+    if ! flock -n 200; then
         echo "ERROR: Another patchstack process is already running" >&2
         echo "If this is incorrect, remove the lock file: $LOCK_FILE" >&2
         exit 1
     fi
     
     verbose_echo "Lock acquired"
+    LOCK_ACQUIRED=true
 }
 
 # Release lock
 release_lock() {
     verbose_echo "Releasing lock"
-    if [[ -n "${LOCK_FD:-}" ]]; then
-        flock -u "$LOCK_FD" 2>/dev/null || true
-        eval "exec $LOCK_FD>&-" 2>/dev/null || true
+    if [[ "${LOCK_ACQUIRED}" == "true" ]]; then
+        flock -u 200 2>/dev/null || true
+        exec 200>&- 2>/dev/null || true
+        LOCK_ACQUIRED=false
     fi
 }
 
@@ -65,8 +64,12 @@ cleanup_temp_resources() {
     fi
     
     # Clean up temporary branches (should already be deleted by normal flow)
-    git branch --list "patchstack-${RUN_ID}-*" 2>/dev/null | while read -r branch; do
-        git branch -D "$branch" 2>/dev/null || true
+    local temp_branches
+    readarray -t temp_branches < <(git branch --list "patchstack-${RUN_ID}-*" 2>/dev/null || printf '')
+    for branch in "${temp_branches[@]}"; do
+        if [[ -n "$branch" ]]; then
+            git branch -D "$branch" 2>/dev/null || true
+        fi
     done
     
     # NOTE: We intentionally do NOT clean up temporary refs immediately
@@ -347,7 +350,8 @@ create_squash_commit() {
     fi
 
     # Attempt squash merge from replayed patch (uses git's default squash message)
-    if ! git merge --squash "$tmp_ref" >/dev/null 2>&1; then
+    # Override merge.ff to ensure we get a commit (not a merge commit)
+    if ! git -c merge.ff=true merge --squash "$tmp_ref" >/dev/null 2>&1; then
         # Conflict during integration
         git merge --abort >/dev/null 2>&1 || true
         git reset --hard >/dev/null 2>&1 || true
@@ -362,7 +366,8 @@ create_squash_commit() {
     fi
 
     # Create the squash commit with git's default message
-    if ! git commit --no-edit >/dev/null 2>&1; then
+    # Override merge.ff to ensure consistent behavior
+    if ! git -c merge.ff=true commit --no-edit >/dev/null 2>&1; then
         # This can happen if there are no changes (shouldn't happen since we already replayed)
         git reset --hard >/dev/null 2>&1 || true
         # Restore original position
@@ -861,6 +866,11 @@ cmd_list() {
 
 # Sync command: synchronize patch stack with upstream
 cmd_sync() {
+    # Generate unique run ID for this sync operation
+    # Uses timestamp + random to ensure uniqueness across concurrent runs
+    RUN_ID="$(date +%Y%m%d-%H%M%S)-$$-${RANDOM}"
+    RUN_REF_PREFIX="refs/patchstack/runs/$RUN_ID"
+    
     # Acquire lock first to prevent concurrent runs
     acquire_lock
     
