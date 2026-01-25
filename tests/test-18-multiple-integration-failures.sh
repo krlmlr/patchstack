@@ -58,9 +58,9 @@ if [ "$commit_count" != "1" ]; then
 fi
 echo "✓ Integration has 1 commit (only patch-a)"
 
-# Verify patch-a is in integration
-log_output=$(git log --oneline upstream/main.."$integration_sha")
-if ! echo "$log_output" | grep -q "patch-a"; then
+# Verify patch-a is in integration by checking file content
+git checkout -q refs/patchstack/tmp/main
+if [ ! -f "conflict.txt" ] || ! grep -q "version-a" conflict.txt; then
     echo "ERROR: patch-a should be integrated"
     cleanup_test_env
     exit 1

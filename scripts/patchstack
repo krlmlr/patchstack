@@ -9,6 +9,14 @@ PATCH_REMOTE="${PATCH_REMOTE:-origin}"
 UPSTREAM_REMOTE="${UPSTREAM_REMOTE:-upstream}"
 MAIN_BRANCH="${MAIN_BRANCH:-main}"
 
+# Verbosity helper - discards output for now, can be changed later
+# Usage: verbose_echo "debug message"
+verbose_echo() {
+    # Currently discards all verbose output
+    # TODO: Add verbosity levels (e.g., PATCHSTACK_VERBOSE=1)
+    :
+}
+
 # Discover patch branches that are descendants of origin/main
 discover_patch_branches() {
     local base_ref="refs/remotes/$PATCH_REMOTE/$MAIN_BRANCH"
@@ -73,6 +81,7 @@ replay_patch_commits() {
     fi
 
     # Create temporary branch starting from upstream/main
+    verbose_echo "Creating temporary branch $tmp_branch from $upstream_ref"
     if ! git branch -f "$tmp_branch" "$upstream_ref" >/dev/null 2>&1; then
         echo "ERROR: Cannot create temporary branch" >&2
         return 1
@@ -202,33 +211,6 @@ create_squash_commit() {
     local branch_name=$1
     local parent_ref=$2
     local tmp_ref=$3
-    local origin_main="refs/remotes/$PATCH_REMOTE/$MAIN_BRANCH"
-    local patch_remote_ref="refs/remotes/$PATCH_REMOTE/$branch_name"
-
-    # Get commit message from first commit in patch
-    local first_commit
-    first_commit=$(git rev-list --reverse "$origin_main..$patch_remote_ref" 2>/dev/null | head -n1)
-    if [[ -z "$first_commit" ]]; then
-        echo "ERROR: Cannot find commits for $branch_name" >&2
-        return 1
-    fi
-
-    local commit_msg
-    commit_msg=$(git log -1 --format=%B "$first_commit" 2>/dev/null)
-    if [[ -z "$commit_msg" ]]; then
-        commit_msg="No commit message"
-    fi
-
-    # Count original commits
-    local commit_count
-    commit_count=$(git rev-list --count "$origin_main..$patch_remote_ref" 2>/dev/null || echo "?")
-
-    # Create squash commit message
-    local squash_msg="Squash: $branch_name
-
-$commit_msg
-
-Original commits: $commit_count"
 
     # Save current position
     local current_branch
@@ -236,6 +218,7 @@ Original commits: $commit_count"
     local tmp_branch="patchstack-integrate-$branch_name"
 
     # Create integration branch from parent ref
+    verbose_echo "Creating integration branch $tmp_branch from $parent_ref"
     if ! git branch -f "$tmp_branch" "$parent_ref" >/dev/null 2>&1; then
         return 1
     fi
@@ -245,8 +228,8 @@ Original commits: $commit_count"
         return 1
     fi
 
-    # Attempt squash merge from replayed patch
-    if ! git merge --squash --no-commit "$tmp_ref" >/dev/null 2>&1; then
+    # Attempt squash merge from replayed patch (uses git's default squash message)
+    if ! git merge --squash "$tmp_ref" >/dev/null 2>&1; then
         # Conflict during integration
         git merge --abort >/dev/null 2>&1 || true
         git reset --hard >/dev/null 2>&1 || true
@@ -255,8 +238,8 @@ Original commits: $commit_count"
         return 2
     fi
 
-    # Create the squash commit
-    if ! git commit -m "$squash_msg" >/dev/null 2>&1; then
+    # Create the squash commit with git's default message
+    if ! git commit --no-edit >/dev/null 2>&1; then
         # This can happen if there are no changes (shouldn't happen since we already replayed)
         git reset --hard >/dev/null 2>&1 || true
         git checkout -q "$current_branch" >/dev/null 2>&1 || git checkout -q main >/dev/null 2>&1 || true
@@ -367,11 +350,11 @@ cmd_list() {
 
 # Sync command: synchronize patch stack with upstream
 cmd_sync() {
-    echo "Starting patchstack sync..."
+    echo "🚀 Starting patchstack sync..."
     echo
 
     # Phase 1: Discovery
-    echo "Phase 1: Discovering patch branches"
+    echo "🔍 Phase 1: Discovering patch branches"
     local patches
     readarray -t patches < <(discover_patch_branches)
     echo "Found ${#patches[@]} patch branches"
@@ -383,7 +366,7 @@ cmd_sync() {
     fi
 
     # Phase 2: Replay
-    echo "Phase 2: Replaying patches onto upstream"
+    echo "🔄 Phase 2: Replaying patches onto upstream"
     local replay_results
     readarray -t replay_results < <(replay_all_patches)
 
@@ -408,7 +391,7 @@ cmd_sync() {
     fi
 
     # Phase 3: Integration
-    echo "Phase 3: Integrating patches into new main"
+    echo "📦 Phase 3: Integrating patches into new main"
     local integration_output
     integration_output=$(integrate_patches)
 
@@ -418,7 +401,7 @@ cmd_sync() {
 
     # Final summary
     echo "==================================="
-    echo "Sync Summary"
+    echo "📊 Sync Summary"
     echo "==================================="
     echo
     echo "Replay results:"

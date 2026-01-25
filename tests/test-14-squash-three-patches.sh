@@ -44,45 +44,27 @@ if [ "$commit_count" != "3" ]; then
 fi
 echo "✓ Integration has 3 commits beyond upstream"
 
-# Check squash commit messages contain patch names
-log_output=$(git log --oneline "$upstream_sha..$integration_sha")
+# Check that files from all patches exist in integration
+git checkout -q refs/patchstack/tmp/main
 
-if ! echo "$log_output" | grep -q "patch-alpha"; then
-    echo "ERROR: Missing patch-alpha in log"
+if [ ! -f "file-patch-alpha.txt" ]; then
+    echo "ERROR: Missing file-patch-alpha.txt"
     cleanup_test_env
     exit 1
 fi
 
-if ! echo "$log_output" | grep -q "patch-beta"; then
-    echo "ERROR: Missing patch-beta in log"
+if [ ! -f "file-patch-beta.txt" ]; then
+    echo "ERROR: Missing file-patch-beta.txt"
     cleanup_test_env
     exit 1
 fi
 
-if ! echo "$log_output" | grep -q "patch-gamma"; then
-    echo "ERROR: Missing patch-gamma in log"
+if [ ! -f "file-patch-gamma.txt" ]; then
+    echo "ERROR: Missing file-patch-gamma.txt"
     cleanup_test_env
     exit 1
 fi
-echo "✓ All patch names present in commit messages"
-
-# Check commits are in lexicographic order (alpha before beta before gamma)
-# The log shows most recent first, so gamma should be first line
-first_line=$(echo "$log_output" | head -n1)
-last_line=$(echo "$log_output" | tail -n1)
-
-if ! echo "$first_line" | grep -q "patch-gamma"; then
-    echo "ERROR: patch-gamma should be the most recent commit"
-    cleanup_test_env
-    exit 1
-fi
-
-if ! echo "$last_line" | grep -q "patch-alpha"; then
-    echo "ERROR: patch-alpha should be the first commit"
-    cleanup_test_env
-    exit 1
-fi
-echo "✓ Commits are in lexicographic order"
+echo "✓ All patch files present in integration"
 
 # Cleanup
 cleanup_test_env

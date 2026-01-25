@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Test: Verify squash commit messages include patch name and count
+# Test: Verify squash commit messages use git's default format
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -40,36 +40,27 @@ if ! git rev-parse refs/patchstack/tmp/main >/dev/null 2>&1; then
     exit 1
 fi
 
-# Check squash commit message
+# Check squash commit message uses git's default format
 integration_sha=$(git rev-parse refs/patchstack/tmp/main)
 squash_msg=$(git log -1 --format=%B "$integration_sha")
 
-# Should contain patch name
-if ! echo "$squash_msg" | grep -q "patch-feature"; then
-    echo "ERROR: Squash message should contain patch name"
+# Git's default squash message contains "Squashed commit of the following:"
+if ! echo "$squash_msg" | grep -q "Squashed commit"; then
+    echo "ERROR: Squash message should contain 'Squashed commit'"
     echo "Message was: $squash_msg"
     cleanup_test_env
     exit 1
 fi
-echo "✓ Squash message contains patch name"
+echo "✓ Squash message uses git's default format"
 
-# Should contain commit count
-if ! echo "$squash_msg" | grep -q "3"; then
-    echo "ERROR: Squash message should contain commit count (3)"
+# Should contain the individual commit messages
+if ! echo "$squash_msg" | grep -q "Feature: part 1"; then
+    echo "ERROR: Squash message should contain original commit messages"
     echo "Message was: $squash_msg"
     cleanup_test_env
     exit 1
 fi
-echo "✓ Squash message contains commit count"
-
-# Should contain "Squash:"
-if ! echo "$squash_msg" | grep -q "Squash:"; then
-    echo "ERROR: Squash message should contain 'Squash:'"
-    echo "Message was: $squash_msg"
-    cleanup_test_env
-    exit 1
-fi
-echo "✓ Squash message contains 'Squash:'"
+echo "✓ Squash message contains original commit messages"
 
 # Cleanup
 cleanup_test_env

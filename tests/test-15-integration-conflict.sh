@@ -51,23 +51,28 @@ if ! git rev-parse refs/patchstack/tmp/main >/dev/null 2>&1; then
 fi
 
 integration_sha=$(git rev-parse refs/patchstack/tmp/main)
-log_output=$(git log --oneline upstream/main.."$integration_sha")
 
-if ! echo "$log_output" | grep -q "patch-alpha"; then
+# Check integration by verifying file contents
+git checkout -q refs/patchstack/tmp/main
+
+# alpha should be integrated (file1.txt should contain alpha's content)
+if [ ! -f "file1.txt" ] || ! grep -q "alpha-change" file1.txt; then
     echo "ERROR: patch-alpha should be integrated"
     cleanup_test_env
     exit 1
 fi
 echo "✓ patch-alpha is integrated"
 
-if echo "$log_output" | grep -q "patch-beta"; then
+# beta conflicts with alpha, so alpha's content should be present, not beta's
+if grep -q "beta-change" file1.txt 2>/dev/null; then
     echo "ERROR: patch-beta should NOT be integrated (integration conflict)"
     cleanup_test_env
     exit 1
 fi
 echo "✓ patch-beta is NOT integrated (expected: integration conflict)"
 
-if ! echo "$log_output" | grep -q "patch-gamma"; then
+# gamma should be integrated (file2.txt should exist with gamma's content)
+if [ ! -f "file2.txt" ] || ! grep -q "gamma-change" file2.txt; then
     echo "ERROR: patch-gamma should be integrated"
     cleanup_test_env
     exit 1
