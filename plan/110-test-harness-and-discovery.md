@@ -4,6 +4,10 @@
 
 **Testing Approach:** Snapshot testing - each test runs actual commands and compares output to committed snapshots.
 
+**Status:** ✓ Complete
+
+**Related Phases:** Foundation for all subsequent phases
+
 ## Overview
 
 This phase establishes the foundation for all future development:
@@ -474,16 +478,16 @@ To update snapshot: run with --apply flag
 
 ## Success Criteria
 
-- [ ] Test harness can create isolated Git repositories
-- [ ] Test harness provides snapshot testing functions
-- [ ] Branch discovery correctly identifies patch branches
-- [ ] Branch discovery excludes main branch
-- [ ] Branch discovery filters by ancestry
-- [ ] Branch discovery sorts lexicographically
-- [ ] All 7+ tests pass with snapshots
-- [ ] Tests run in <2 seconds
-- [ ] Tests clean up after themselves
-- [ ] Snapshots are committed to Git
+- [x] Test harness can create isolated Git repositories
+- [x] Test harness provides snapshot testing functions
+- [x] Branch discovery correctly identifies patch branches
+- [x] Branch discovery excludes main branch
+- [x] Branch discovery filters by ancestry
+- [x] Branch discovery sorts lexicographically
+- [x] All 7+ tests pass with snapshots
+- [x] Tests run in <2 seconds
+- [x] Tests clean up after themselves
+- [x] Snapshots are committed to Git
 
 ## Next Phase
 

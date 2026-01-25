@@ -2,6 +2,12 @@
 
 **Goal:** Implement and test the ability to replay patch branch commits onto upstream/main using lower-level Git operations, with proper conflict detection and empty patch handling.
 
+**Status:** ✓ Complete
+
+**Dependencies:** Phase 1.1 (test harness and discovery)
+
+**Related Phases:** Provides replayed refs for Phase 1.3 (squash integration)
+
 ## Overview
 
 This phase implements the core commit replay logic:

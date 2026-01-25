@@ -13,42 +13,47 @@
 
 **Build:**
 
-- [ ] Create `tests/test-harness.sh` - helpers for local Git repo setup
+- [x] Create `tests/harness.sh` - helpers for local Git repo setup
     - `setup_test_env()` - create throwaway repos (upstream, fork)
     - `create_patch_branch()` - helper to create patch branches
+    - `assert_snapshot()` - snapshot testing
     - `assert_*()` - test assertions
-- [ ] Create `scripts/patchstack` minimal script scaffold
-- [ ] Implement branch discovery logic (hard part: ancestry + lexicographic sort)
+- [x] Create `scripts/patchstack` minimal script scaffold
+- [x] Implement branch discovery logic (hard part: ancestry + lexicographic sort)
     - List all `refs/remotes/origin/*`
     - Filter descendants of origin/main at sync start
     - Sort lexicographically by branch name
 
 **Test:**
 
-- [ ] Test: discovery with no patch branches returns empty
-- [ ] Test: discovery with 3 patches returns sorted list
-- [ ] Test: discovery excludes non-descendants
-- [ ] Test: discovery excludes origin/main
+- [x] Test: discovery with no patch branches returns empty
+- [x] Test: discovery with 3 patches returns sorted list
+- [x] Test: discovery excludes non-descendants
+- [x] Test: discovery excludes origin/main
+
+**Detailed Plan:** See [plan/110-test-harness-and-discovery.md](plan/110-test-harness-and-discovery.md)
 
 ### Phase 1.2: Replay Patch Commits
 
 **Build:**
 
-- [ ] Implement commit replay logic for patch branches
+- [x] Implement commit replay logic for patch branches
     - List commits between origin/main and patch branch
     - Replay each commit onto upstream/main using cherry-pick
     - Squash merge commits into single commits
     - Store result in temporary local ref
-- [ ] Detect and handle replay conflicts (leave unresolved, mark failed)
-- [ ] Detect empty patches (replayed tree equals upstream tree)
+- [x] Detect and handle replay conflicts (leave unresolved, mark failed)
+- [x] Detect empty patches (replayed tree equals upstream tree)
 
 **Test:**
 
-- [ ] Test: clean replay of patch-A with 2 commits
-- [ ] Test: replay conflict stops and marks branch failed
-- [ ] Test: empty patch (already merged upstream) detected
-- [ ] Test: merge commits are squashed during replay
-- [ ] Test: multiple patches replay independently
+- [x] Test: clean replay of patch-A with 2 commits
+- [x] Test: replay conflict stops and marks branch failed
+- [x] Test: empty patch (already merged upstream) detected
+- [x] Test: merge commits are squashed during replay
+- [x] Test: multiple patches replay independently
+
+**Detailed Plan:** See [plan/120-rebase-single-patch.md](plan/120-rebase-single-patch.md)
 
 ### Phase 1.3: Squash Integration
 
@@ -59,7 +64,7 @@
     - For each viable patch in order:
         - Create squash commit of all patch changes
         - Try to apply onto integration branch
-    - Build final `tmp/patchstack-main` reference
+    - Build final `refs/patchstack/tmp/main` reference
 - [ ] Detect integration conflicts (patch rebases but conflicts during squash)
 - [ ] Gate logic: only viable patches contribute to main
 
@@ -69,6 +74,9 @@
 - [ ] Test: integration conflict excludes patch-B, includes A and C
 - [ ] Test: verify squash commit messages include patch name
 - [ ] Test: empty patches excluded from integration
+- [ ] Test: multiple integration failures handled correctly
+
+**Detailed Plan:** See [plan/130-squash-integration.md](plan/130-squash-integration.md)
 
 ### Phase 1.4: Atomic Update (Ref Updates Only)
 
@@ -80,6 +88,7 @@
     - Delete refs for empty patches
 - [ ] Record metadata in refs/notes/patchstack
     - Branch name, old SHA, new SHA, status, timestamp
+- [ ] Rebase patch commits onto new integrated main
 
 **Test:**
 
@@ -88,6 +97,8 @@
 - [ ] Test: empty patch ref deleted
 - [ ] Test: notes created for all processed branches
 - [ ] Test: verify ref state matches expected topology
+
+**Detailed Plan:** See [plan/140-atomic-update.md](plan/140-atomic-update.md)
 
 ### Phase 1.5: Atomic Push
 
@@ -108,12 +119,14 @@
 - [ ] Test: verify remote state after successful push
 - [ ] Test: verify notes pushed to remote
 
+**Detailed Plan:** See [plan/150-atomic-push.md](plan/150-atomic-push.md)
+
 ### Phase 1.6: End-to-End Scenarios
 
 **Build:**
 
 - [ ] Wire all phases together into `patchstack sync` command
-- [ ] Add basic error handling and status reporting
+- [ ] Add comprehensive status reporting and summaries
 - [ ] Keep operation idempotent (safe to re-run)
 
 **Test:**
@@ -123,7 +136,9 @@
 - [ ] Test Scenario C: Integration conflict (patch-B excluded)
 - [ ] Test Scenario D: Empty patch (patch-C deleted)
 - [ ] Test Scenario E: Multiple failures (only viable patches included)
-- [ ] Test: Re-running sync with no changes is no-op
+- [ ] Test Scenario F: Re-running sync with no changes is no-op
+
+**Detailed Plan:** See [plan/160-end-to-end-scenarios.md](plan/160-end-to-end-scenarios.md)
 
 ### Phase 1.7: Dry-Run and Status
 
@@ -131,28 +146,39 @@
 
 - [ ] Add `--dry-run` flag (perform all checks, no ref updates)
 - [ ] Add `status` subcommand (show patch stack state)
-- [ ] Add basic logging/verbosity
+- [ ] Add `--verbose` flag for detailed logging
+- [ ] Enhance `list` command with verbose mode
 
 **Test:**
 
 - [ ] Test: dry-run shows planned changes without making them
 - [ ] Test: status shows current patch branches and integration state
+- [ ] Test: status detects when sync is needed
+- [ ] Test: verbose list shows commit counts and SHAs
+
+**Detailed Plan:** See [plan/170-dry-run-and-status.md](plan/170-dry-run-and-status.md)
 
 ### Phase 1.8: Error Recovery
 
 **Build:**
 
+- [ ] Pre-flight checks (working tree, HEAD, remotes, refs)
 - [ ] Handle dirty working tree (detect, advise user)
 - [ ] Handle detached HEAD gracefully
 - [ ] Handle missing upstream/main or origin/main
-- [ ] Cleanup temporary refs on failure
+- [ ] Cleanup temporary refs on failure (trap on exit)
+- [ ] Safe rollback on ref update failures
+- [ ] Context-aware error messages with guidance
 
 **Test:**
 
 - [ ] Test: dirty working tree prevents sync
+- [ ] Test: detached HEAD prevents sync
 - [ ] Test: missing upstream remote gives clear error
 - [ ] Test: missing origin/main gives clear error
 - [ ] Test: temporary refs cleaned up after failure
+
+**Detailed Plan:** See [plan/180-error-recovery.md](plan/180-error-recovery.md)
 
 ## Milestone 2: GitHub Action for Reusable Workflows
 
