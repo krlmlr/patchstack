@@ -22,7 +22,7 @@ git remote set-url origin "$REMOTE_DIR"
 cd "$REMOTE_DIR"
 mkdir -p hooks
 cat > hooks/pre-receive << 'HOOK_EOF'
-#!/bin/bash
+#!/usr/bin/env bash
 # Make push slow to give time for lock testing
 sleep 3
 HOOK_EOF

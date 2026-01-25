@@ -118,7 +118,7 @@ fi
 
 echo "Cleaning up temporary refs..."
 git for-each-ref --format='%(refname)' 'refs/patchstack/runs/' | \
-  xargs -I {} git update-ref -d {}
+  xargs -I {} git update-ref -d {} || true
 echo "✓ Removed temporary refs"
 
 echo "Cleaning up temporary directories..."

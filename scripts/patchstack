@@ -864,7 +864,7 @@ cmd_sync() {
     # Acquire lock first to prevent concurrent runs
     acquire_lock
     
-    # Clean up stale refs from previous runs (before generating new run ID)
+    # Clean up stale refs from previous runs (after acquiring lock, before main sync operations)
     cleanup_stale_refs
     
     # Create run-specific temporary directory
