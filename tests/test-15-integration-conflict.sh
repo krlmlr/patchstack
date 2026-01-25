@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Test: Integration conflict excludes patch-B, includes A and C
+# Test: Integration conflict excludes patch-beta, includes patch-alpha and patch-gamma
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -9,6 +9,11 @@ source "$SCRIPT_DIR/harness.sh"
 # Setup test environment
 setup_test_env
 cd "$FORK_DIR"
+
+# Create a real remote (bare repository)
+REMOTE_DIR="$TEST_DIR/remote"
+git clone --bare "$FORK_DIR" "$REMOTE_DIR"
+git remote set-url origin "$REMOTE_DIR"
 
 # Create patch-alpha: modifies file1.txt
 git checkout -q -b patch-alpha origin/main
@@ -56,7 +61,7 @@ integration_sha=$(git rev-parse refs/patchstack/tmp/main)
 git checkout -q refs/patchstack/tmp/main
 
 # alpha should be integrated (file1.txt should contain alpha's content)
-if [ ! -f "file1.txt" ] || ! grep -q "alpha-change" file1.txt; then
+if [[ ! -f "file1.txt" ]] || ! grep -q "alpha-change" file1.txt; then
     echo "ERROR: patch-alpha should be integrated"
     cleanup_test_env
     exit 1
@@ -72,7 +77,7 @@ fi
 echo "✓ patch-beta is NOT integrated (expected: integration conflict)"
 
 # gamma should be integrated (file2.txt should exist with gamma's content)
-if [ ! -f "file2.txt" ] || ! grep -q "gamma-change" file2.txt; then
+if [[ ! -f "file2.txt" ]] || ! grep -q "gamma-change" file2.txt; then
     echo "ERROR: patch-gamma should be integrated"
     cleanup_test_env
     exit 1
@@ -81,7 +86,7 @@ echo "✓ patch-gamma is integrated"
 
 # Should have 2 commits (alpha + gamma)
 commit_count=$(git rev-list --count upstream/main.."$integration_sha")
-if [ "$commit_count" != "2" ]; then
+if [[ "$commit_count" != "2" ]]; then
     echo "ERROR: Expected 2 commits, got $commit_count"
     cleanup_test_env
     exit 1

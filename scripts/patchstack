@@ -90,6 +90,8 @@ replay_patch_commits() {
     # Save current branch/commit
     local current_branch
     current_branch=$(git symbolic-ref --short HEAD 2>/dev/null || echo "")
+    local current_head
+    current_head=$(git rev-parse HEAD 2>/dev/null)
 
     # Checkout temporary branch
     if ! git checkout -q "$tmp_branch" 2>/dev/null; then
@@ -137,6 +139,8 @@ replay_patch_commits() {
     # Return to original branch/commit
     if [[ -n "$current_branch" ]]; then
         git checkout -q "$current_branch" 2>/dev/null || true
+    elif [[ -n "$current_head" ]]; then
+        git checkout -q "$current_head" 2>/dev/null || true
     fi
 
     if [[ $failed -eq 1 ]]; then
@@ -157,8 +161,11 @@ replay_patch_commits() {
     upstream_tree=$(git rev-parse "$upstream_ref^{tree}")
 
     if [[ "$replayed_tree" == "$upstream_tree" ]] || [[ $empty -eq 1 ]]; then
-        # Empty patch - but keep the tmp ref so calculate_ref_updates can detect it
-        # and generate a delete action for the push
+        # Empty patch detected - keep tmp ref for delete action generation
+        # The tmp ref must exist so calculate_ref_updates can:
+        # 1. Detect the patch as empty (by comparing trees)
+        # 2. Generate a delete action for the remote ref
+        # The integration phase will skip it by checking tree equality
         return 4
     fi
 
@@ -207,6 +214,8 @@ create_squash_commit() {
     # Save current position
     local current_branch
     current_branch=$(git symbolic-ref --short HEAD 2>/dev/null || echo "")
+    local current_head
+    current_head=$(git rev-parse HEAD 2>/dev/null)
     local tmp_branch="patchstack-integrate-$branch_name"
 
     # Create integration branch from parent ref
@@ -225,7 +234,12 @@ create_squash_commit() {
         # Conflict during integration
         git merge --abort >/dev/null 2>&1 || true
         git reset --hard >/dev/null 2>&1 || true
-        git checkout -q "$current_branch" >/dev/null 2>&1 || git checkout -q main >/dev/null 2>&1 || true
+        # Restore original position
+        if [[ -n "$current_branch" ]]; then
+            git checkout -q "$current_branch" >/dev/null 2>&1 || true
+        elif [[ -n "$current_head" ]]; then
+            git checkout -q "$current_head" >/dev/null 2>&1 || true
+        fi
         git branch -D "$tmp_branch" >/dev/null 2>&1 || true
         return 2
     fi
@@ -234,7 +248,12 @@ create_squash_commit() {
     if ! git commit --no-edit >/dev/null 2>&1; then
         # This can happen if there are no changes (shouldn't happen since we already replayed)
         git reset --hard >/dev/null 2>&1 || true
-        git checkout -q "$current_branch" >/dev/null 2>&1 || git checkout -q main >/dev/null 2>&1 || true
+        # Restore original position
+        if [[ -n "$current_branch" ]]; then
+            git checkout -q "$current_branch" >/dev/null 2>&1 || true
+        elif [[ -n "$current_head" ]]; then
+            git checkout -q "$current_head" >/dev/null 2>&1 || true
+        fi
         git branch -D "$tmp_branch" >/dev/null 2>&1 || true
         return 1
     fi
@@ -245,9 +264,9 @@ create_squash_commit() {
 
     # Return to original state
     if [[ -n "$current_branch" ]]; then
-        git checkout -q "$current_branch" >/dev/null 2>&1 || git checkout -q main >/dev/null 2>&1 || true
-    else
-        git checkout -q main >/dev/null 2>&1 || true
+        git checkout -q "$current_branch" >/dev/null 2>&1 || true
+    elif [[ -n "$current_head" ]]; then
+        git checkout -q "$current_head" >/dev/null 2>&1 || true
     fi
     git branch -D "$tmp_branch" >/dev/null 2>&1 || true
 
@@ -284,6 +303,17 @@ integrate_patches() {
 
     for branch_name in "${viable_patches[@]}"; do
         local tmp_ref="refs/patchstack/tmp/$branch_name"
+
+        # Skip empty patches (tree equals upstream)
+        local tmp_tree
+        local upstream_tree
+        tmp_tree=$(git rev-parse "$tmp_ref^{tree}")
+        upstream_tree=$(git rev-parse "$upstream_ref^{tree}")
+        
+        if [[ "$tmp_tree" == "$upstream_tree" ]]; then
+            verbose_echo "Skipping $branch_name: empty patch (all changes already in upstream)"
+            continue
+        fi
 
         # Create squash commit
         local squash_sha
@@ -322,6 +352,7 @@ integrate_patches() {
 }
 
 # Calculate which refs need updating based on integration results
+# Takes integration results as arguments (integrated:branch or failed:branch:reason)
 calculate_ref_updates() {
     local integration_main="refs/patchstack/tmp/main"
     
@@ -332,6 +363,15 @@ calculate_ref_updates() {
         # Update main
         echo "update:refs/remotes/$PATCH_REMOTE/$MAIN_BRANCH:$new_main_sha"
     fi
+
+    # Build a set of integrated patches for quick lookup
+    declare -A integrated_set
+    for result in "$@"; do
+        if [[ "$result" == integrated:* ]]; then
+            local branch=${result#integrated:}
+            integrated_set["$branch"]=1
+        fi
+    done
 
     # Process each replayed patch by looking at temporary refs
     # (Don't use discover_patch_branches here because origin/main has been updated
@@ -364,12 +404,15 @@ calculate_ref_updates() {
             # Empty patch - delete the ref
             verbose_echo "calculate_ref_updates: $branch is empty, deleting"
             echo "delete:$remote_ref"
-        else
-            # Update to point to replayed version
+        elif [[ -n "${integrated_set[$branch]:-}" ]]; then
+            # Only update if patch was successfully integrated
             local new_sha
             new_sha=$(git rev-parse "$tmp_ref")
             verbose_echo "calculate_ref_updates: $branch updated to $new_sha"
             echo "update:$remote_ref:$new_sha"
+        else
+            # Patch failed integration - leave unchanged
+            verbose_echo "calculate_ref_updates: $branch failed integration, leaving unchanged"
         fi
     done
 }
@@ -392,16 +435,24 @@ Old SHA: $old_sha
 New SHA: $new_sha
 "
 
-    # Add note to the new commit
-    if [[ "$new_sha" != "deleted" ]]; then
-        git notes --ref=patchstack add -f -m "$note" "$new_sha" 2>/dev/null || true
+    # Add note to the relevant commit (new tip, or old tip for deletions)
+    local target_sha
+    if [[ "$new_sha" == "deleted" ]]; then
+        target_sha="$old_sha"
+    else
+        target_sha="$new_sha"
+    fi
+
+    if [[ -n "${target_sha:-}" ]]; then
+        git notes --ref=patchstack add -f -m "$note" "$target_sha" 2>/dev/null || true
     fi
 }
 
 # Apply all calculated ref updates atomically
+# Takes integration results as arguments
 apply_ref_updates() {
     local updates
-    readarray -t updates < <(calculate_ref_updates)
+    readarray -t updates < <(calculate_ref_updates "$@")
 
     if [[ ${#updates[@]} -eq 0 ]]; then
         echo "No ref updates needed"
@@ -412,6 +463,7 @@ apply_ref_updates() {
 
     # Build list of updates for atomic transaction
     local update_cmds=()
+    local note_data=()
 
     for update in "${updates[@]}"; do
         local action=${update%%:*}
@@ -432,8 +484,8 @@ apply_ref_updates() {
                 update_cmds+=("create $ref $new_sha")
             fi
 
-            # Record notes
-            record_notes "$ref" "$old_sha" "$new_sha" "updated"
+            # Collect note data for later (after transaction succeeds)
+            note_data+=("$ref:$old_sha:$new_sha:updated")
 
         elif [[ "$action" == "delete" ]]; then
             local ref=$rest
@@ -444,7 +496,8 @@ apply_ref_updates() {
 
             if [[ -n "$old_sha" ]]; then
                 update_cmds+=("delete $ref $old_sha")
-                record_notes "$ref" "$old_sha" "deleted" "empty"
+                # Collect note data for later (after transaction succeeds)
+                note_data+=("$ref:$old_sha:deleted:empty")
             fi
         fi
     done
@@ -453,6 +506,13 @@ apply_ref_updates() {
     if [[ ${#update_cmds[@]} -gt 0 ]]; then
         if printf '%s\n' "${update_cmds[@]}" | git update-ref --stdin; then
             echo "✓ All refs updated successfully"
+            
+            # Only write notes after successful update
+            for note in "${note_data[@]}"; do
+                IFS=: read -r ref old_sha new_sha status <<< "$note"
+                record_notes "$ref" "$old_sha" "$new_sha" "$status"
+            done
+            
             return 0
         else
             echo "✗ Ref update failed"
@@ -465,9 +525,10 @@ apply_ref_updates() {
 
 # Capture the current state of remote tracking refs before updating
 # Output format: ref:old_sha
+# Takes integration results as arguments
 capture_ref_state() {
     local updates
-    readarray -t updates < <(calculate_ref_updates)
+    readarray -t updates < <(calculate_ref_updates "$@")
 
     for update in "${updates[@]}"; do
         local action=${update%%:*}
@@ -488,14 +549,16 @@ capture_ref_state() {
 }
 
 # Build refspec list for atomic push with force-with-lease
-# Takes the pre-update ref state as input
+# Takes the pre-update ref state file path and integration results as input
 build_push_refspecs() {
+    local ref_state_file=$1
+    shift  # Remove first argument, rest are integration results
     local refspecs=()
     local lease_options=()
 
     # Get all updated refs from previous phase
     local updates
-    readarray -t updates < <(calculate_ref_updates)
+    readarray -t updates < <(calculate_ref_updates "$@")
 
     verbose_echo "calculate_ref_updates returned ${#updates[@]} updates:"
     for u in "${updates[@]}"; do
@@ -510,7 +573,7 @@ build_push_refspecs() {
         local old_sha=${line#*:}
         old_shas["$ref"]=$old_sha
         verbose_echo "Captured old SHA for $ref: $old_sha"
-    done < /tmp/patchstack-ref-state.$$
+    done < "$ref_state_file"
 
     for update in "${updates[@]}"; do
         local action=${update%%:*}
@@ -519,7 +582,13 @@ build_push_refspecs() {
         if [[ "$action" = "update" ]]; then
             local ref=${rest%%:*}
             local new_sha=${rest#*:}
-            local old_sha="${old_shas[$ref]}"
+            local old_sha="${old_shas[$ref]-}"
+
+            # Validate that we have captured old SHA for this ref
+            if [[ -z "$old_sha" ]]; then
+                echo "ERROR: No captured state for ref $ref" >&2
+                return 1
+            fi
 
             verbose_echo "Processing update: ref=$ref, new=$new_sha, old=$old_sha"
 
@@ -529,25 +598,27 @@ build_push_refspecs() {
             # Add refspec: local_sha:remote_ref
             refspecs+=("$new_sha:refs/heads/$branch_name")
 
-            # Add force-with-lease for this ref
-            if [[ -n "$old_sha" ]]; then
-                lease_options+=("--force-with-lease=refs/heads/$branch_name:$old_sha")
-            fi
+            # Always add force-with-lease for concurrency protection
+            lease_options+=("--force-with-lease=refs/heads/$branch_name:$old_sha")
 
         elif [[ "$action" = "delete" ]]; then
             local ref=$rest
             local branch_name=${ref#refs/remotes/"$PATCH_REMOTE"/}
-            local old_sha="${old_shas[$ref]}"
+            local old_sha="${old_shas[$ref]-}"
+
+            # Validate that we have captured old SHA for deletion
+            if [[ -z "$old_sha" ]]; then
+                echo "ERROR: No captured state for ref $ref" >&2
+                return 1
+            fi
 
             verbose_echo "Processing delete: ref=$ref, old=$old_sha"
 
             # Add deletion refspec: :remote_ref
             refspecs+=(":refs/heads/$branch_name")
 
-            # Add force-with-lease for deletion
-            if [[ -n "$old_sha" ]]; then
-                lease_options+=("--force-with-lease=refs/heads/$branch_name:$old_sha")
-            fi
+            # Always add force-with-lease for deletion
+            lease_options+=("--force-with-lease=refs/heads/$branch_name:$old_sha")
         fi
     done
 
@@ -562,11 +633,14 @@ build_push_refspecs() {
 }
 
 # Executes the atomic push with all refspecs
+# Takes ref state file path and integration results as arguments
 push_refs() {
+    local ref_state_file=$1
+    shift  # Remove first argument, rest are integration results
     echo "Preparing push..."
 
     local pushspecs
-    readarray -t pushspecs < <(build_push_refspecs)
+    readarray -t pushspecs < <(build_push_refspecs "$ref_state_file" "$@")
 
     if [[ ${#pushspecs[@]} -eq 0 ]]; then
         echo "No changes to push"
@@ -673,6 +747,11 @@ cmd_sync() {
     echo "🚀 Starting patchstack sync..."
     echo
 
+    # Clean up any stale tmp refs from previous runs
+    git for-each-ref --format='%(refname)' 'refs/patchstack/tmp/' | while read -r ref; do
+        git update-ref -d "$ref" >/dev/null 2>&1 || true
+    done
+
     # Phase 1: Discovery
     echo "🔍 Phase 1: Discovering patch branches"
     local patches
@@ -701,27 +780,29 @@ cmd_sync() {
     echo
 
     # Phase 3: Integration
+    local integration_results=()
     if [[ $viable -eq 0 ]]; then
         echo "📦 Phase 3: No patches to integrate"
         echo
         # Still need to handle empty patches and update refs
     else
         echo "📦 Phase 3: Integrating patches into new main"
-        # Capture integration results but don't use them (output goes to stderr)
-        integrate_patches > /dev/null
+        # Capture integration results for summary
+        readarray -t integration_results < <(integrate_patches)
         echo
     fi
 
     # Capture ref state BEFORE Phase 4 updates them (for force-with-lease)
-    local ref_state_file="/tmp/patchstack-ref-state.$$"
-    capture_ref_state > "$ref_state_file"
+    local ref_state_file
+    ref_state_file="$(mktemp "${TMPDIR:-/tmp}/patchstack-ref-state.XXXXXX")"
+    capture_ref_state "${integration_results[@]}" > "$ref_state_file"
 
     # Phase 4: Update refs (always run to handle empty patches)
     echo "🔄 Phase 4: Updating local refs"
     
     # Check if we have viable patches or only need to clean up
     if [[ $viable -gt 0 ]]; then
-        if ! apply_ref_updates; then
+        if ! apply_ref_updates "${integration_results[@]}"; then
             echo "ERROR: Failed to update refs"
             return 1
         fi
@@ -739,6 +820,7 @@ cmd_sync() {
         if [[ "$has_empty" == "true" ]]; then
             echo "Deleting empty patch refs..."
             local update_cmds=()
+            local note_data=()
             for result in "${replay_results[@]}"; do
                 if [[ "$result" == *:empty ]]; then
                     local branch=${result%%:*}
@@ -749,7 +831,8 @@ cmd_sync() {
                     if [[ -n "$old_sha" ]]; then
                         echo "  Deleting $ref"
                         update_cmds+=("delete $ref $old_sha")
-                        record_notes "$ref" "$old_sha" "deleted" "empty"
+                        # Collect note data for later (after transaction succeeds)
+                        note_data+=("$ref:$old_sha:deleted:empty")
                     fi
                 fi
             done
@@ -757,6 +840,12 @@ cmd_sync() {
             if [[ ${#update_cmds[@]} -gt 0 ]]; then
                 if printf '%s\n' "${update_cmds[@]}" | git update-ref --stdin; then
                     echo "✓ Empty patch refs deleted"
+                    
+                    # Only write notes after successful update
+                    for note in "${note_data[@]}"; do
+                        IFS=: read -r ref old_sha new_sha status <<< "$note"
+                        record_notes "$ref" "$old_sha" "$new_sha" "$status"
+                    done
                 else
                     echo "✗ Failed to delete refs"
                     return 1
@@ -770,7 +859,7 @@ cmd_sync() {
 
     # Phase 5: Push to remote
     echo "🚀 Phase 5: Pushing to $PATCH_REMOTE"
-    if ! push_refs; then
+    if ! push_refs "$ref_state_file" "${integration_results[@]}"; then
         echo "ERROR: Push failed"
         echo "Local refs updated but remote unchanged"
         rm -f "$ref_state_file"
@@ -789,7 +878,69 @@ cmd_sync() {
     echo "📊 Sync Complete"
     echo "==================================="
     echo
-    echo "✓ All patches synced successfully"
+
+    # Count different outcomes
+    local success=0
+    local failed_count=0
+    local empty=0
+    local failed_patches=()
+    local empty_patches=()
+
+    # Build a set of integration failures
+    declare -A integration_failures
+    for result in "${integration_results[@]}"; do
+        if [[ "$result" == failed:* ]]; then
+            local branch_and_reason=${result#failed:}
+            local branch=${branch_and_reason%%:*}
+            local reason=${branch_and_reason#*:}
+            integration_failures["$branch"]="$reason"
+        fi
+    done
+
+    # Process replay results, taking integration into account
+    for result in "${replay_results[@]}"; do
+        local patch=${result%%:*}
+        local status=${result#*:}
+        
+        # Check if this patch failed integration
+        if [[ -n "${integration_failures[$patch]:-}" ]]; then
+            ((failed_count++)) || true
+            failed_patches+=("$patch (${integration_failures[$patch]})")
+        elif [[ "$status" == "success" ]]; then
+            ((success++)) || true
+        elif [[ "$status" == "empty" ]]; then
+            ((empty++)) || true
+            empty_patches+=("$patch")
+        else
+            # Replay failure (conflict, invalid, etc)
+            ((failed_count++)) || true
+            failed_patches+=("$patch ($status)")
+        fi
+    done
+
+    # Show summary
+    if [[ $success -gt 0 ]]; then
+        echo "✓ Synced: $success patches"
+    fi
+    
+    if [[ $empty -gt 0 ]]; then
+        echo "○ Removed: $empty empty patches"
+        for patch in "${empty_patches[@]}"; do
+            echo "  - $patch (already merged upstream)"
+        done
+    fi
+    
+    if [[ $failed_count -gt 0 ]]; then
+        echo "✗ Failed: $failed_count patches"
+        for patch_info in "${failed_patches[@]}"; do
+            echo "  - $patch_info"
+        done
+        echo
+        echo "Failed patches remain unchanged at their original commits."
+        echo "To fix: manually resolve conflicts and re-run sync."
+    fi
+    
+    echo
     echo "✓ Remote updated"
 }
 

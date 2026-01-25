@@ -10,6 +10,11 @@ source "$SCRIPT_DIR/harness.sh"
 setup_test_env
 cd "$FORK_DIR"
 
+# Create a real remote (bare repository)
+REMOTE_DIR="$TEST_DIR/remote"
+git clone --bare "$FORK_DIR" "$REMOTE_DIR"
+git remote set-url origin "$REMOTE_DIR"
+
 # All three patches modify the same file - only the first will integrate
 git checkout -q -b patch-a origin/main
 echo "version-a" > conflict.txt
@@ -51,7 +56,7 @@ fi
 integration_sha=$(git rev-parse refs/patchstack/tmp/main)
 commit_count=$(git rev-list --count upstream/main.."$integration_sha")
 
-if [ "$commit_count" != "1" ]; then
+if [[ "$commit_count" != "1" ]]; then
     echo "ERROR: Expected 1 commit (only patch-a), got $commit_count"
     cleanup_test_env
     exit 1
@@ -60,7 +65,7 @@ echo "✓ Integration has 1 commit (only patch-a)"
 
 # Verify patch-a is in integration by checking file content
 git checkout -q refs/patchstack/tmp/main
-if [ ! -f "conflict.txt" ] || ! grep -q "version-a" conflict.txt; then
+if [[ ! -f "conflict.txt" ]] || ! grep -q "version-a" conflict.txt; then
     echo "ERROR: patch-a should be integrated"
     cleanup_test_env
     exit 1
