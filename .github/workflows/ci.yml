@@ -25,11 +25,14 @@ jobs:
       - name: Check script syntax
         run: |
           bash -n scripts/patchstack
-          shellcheck scripts/patchstack || true
+      
+      - name: Lint with shellcheck
+        run: |
+          shellcheck scripts/patchstack
       
       - name: Run test suite
         run: |
-          ./tests/run-all-tests.sh
+          bash ./tests/run-all-tests.sh
       
       - name: Show test results summary
         if: always()
