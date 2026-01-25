@@ -10,6 +10,11 @@ source "$SCRIPT_DIR/harness.sh"
 setup_test_env
 cd "$FORK_DIR"
 
+# Create a real remote (bare repository)
+REMOTE_DIR="$TEST_DIR/remote"
+git clone --bare "$FORK_DIR" "$REMOTE_DIR"
+git remote set-url origin "$REMOTE_DIR"
+
 # Create patch with multiple commits
 git checkout -q -b patch-feature origin/main
 echo "commit 1" > file1.txt

@@ -10,10 +10,18 @@ source "$SCRIPT_DIR/harness.sh"
 setup_test_env
 cd "$FORK_DIR"
 
+# Create a real remote (bare repository)
+REMOTE_DIR="$TEST_DIR/remote"
+git clone --bare "$FORK_DIR" "$REMOTE_DIR"
+git remote set-url origin "$REMOTE_DIR"
+
 # Create three patches
 create_patch_branch "patch-alpha" 2
 create_patch_branch "patch-beta" 3
 create_patch_branch "patch-gamma" 1
+
+# Push patches to remote
+git push origin patch-alpha patch-beta patch-gamma
 
 # Advance upstream
 advance_upstream 1
