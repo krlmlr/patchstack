@@ -86,13 +86,29 @@ cmd_sync() {
 
 **Location:** `scripts/patchstack` line 161
 
-**Fix:** Delete tmp ref for empty patches so integration doesn't attempt to process them.
+**Fix:** Keep tmp ref for empty patches (needed for delete action generation), but skip them during integration by checking tree equality.
 
+During replay:
 ```bash
 if [[ "$replayed_tree" == "$upstream_tree" ]] || [[ $empty -eq 1 ]]; then
-    # Empty patch - remove the tmp ref so integration skips it
-    git update-ref -d "$tmp_ref" >/dev/null 2>&1 || true
+    # Empty patch - keep the tmp ref so calculate_ref_updates can detect it
+    # and generate a delete action for the push
+    # Integration phase will skip it by checking tree equality
     return 4
+fi
+```
+
+During integration:
+```bash
+# Skip empty patches (tree equals upstream)
+local tmp_tree
+local upstream_tree
+tmp_tree=$(git rev-parse "$tmp_ref^{tree}")
+upstream_tree=$(git rev-parse "$upstream_ref^{tree}")
+
+if [[ "$tmp_tree" == "$upstream_tree" ]]; then
+    verbose_echo "Skipping empty patch $branch_name during integration"
+    continue
 fi
 ```
 

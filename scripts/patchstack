@@ -161,9 +161,11 @@ replay_patch_commits() {
     upstream_tree=$(git rev-parse "$upstream_ref^{tree}")
 
     if [[ "$replayed_tree" == "$upstream_tree" ]] || [[ $empty -eq 1 ]]; then
-        # Empty patch - keep the tmp ref so calculate_ref_updates can detect it
-        # and generate a delete action for the push
-        # Integration phase will skip it by checking tree equality
+        # Empty patch detected - keep tmp ref for delete action generation
+        # The tmp ref must exist so calculate_ref_updates can:
+        # 1. Detect the patch as empty (by comparing trees)
+        # 2. Generate a delete action for the remote ref
+        # The integration phase will skip it by checking tree equality
         return 4
     fi
 
@@ -309,7 +311,7 @@ integrate_patches() {
         upstream_tree=$(git rev-parse "$upstream_ref^{tree}")
         
         if [[ "$tmp_tree" == "$upstream_tree" ]]; then
-            verbose_echo "Skipping empty patch $branch_name during integration"
+            verbose_echo "Skipping $branch_name: empty patch (all changes already in upstream)"
             continue
         fi
 
