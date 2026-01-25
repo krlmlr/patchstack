@@ -82,23 +82,25 @@
 
 **Build:**
 
-- [ ] Implement local ref updates (no push yet)
+- [x] Implement local ref updates (no push yet)
     - Update refs/remotes/origin/main to new main
     - Update refs/remotes/origin/* for viable patches
     - Delete refs for empty patches
-- [ ] Record metadata in refs/notes/patchstack
+- [x] Record metadata in refs/notes/patchstack
     - Branch name, old SHA, new SHA, status, timestamp
-- [ ] Rebase patch commits onto new integrated main
+- [x] Patches remain based on upstream (not rebased onto integrated main)
 
 **Test:**
 
-- [ ] Test: successful sync updates all local remote refs
-- [ ] Test: failed patch keeps old ref unchanged
-- [ ] Test: empty patch ref deleted
-- [ ] Test: notes created for all processed branches
-- [ ] Test: verify ref state matches expected topology
+- [x] Test: successful sync updates all local remote refs
+- [x] Test: failed patch keeps old ref unchanged
+- [x] Test: empty patch ref deleted
+- [x] Test: notes created for all processed branches
+- [x] Test: verify ref state matches expected topology
 
 **Detailed Plan:** See [plan/140-atomic-update.md](plan/140-atomic-update.md)
+
+**Status:** ✓ Complete
 
 ### Phase 1.5: Atomic Push
 

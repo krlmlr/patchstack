@@ -179,12 +179,10 @@ replay_all_patches() {
     local results=()
 
     for branch in "${branches[@]}"; do
-        echo "Replaying $branch..."
-
         local status
         if replay_patch_commits "$branch"; then
             status="success"
-            echo "  ✓ Replayed successfully"
+            echo "Replaying $branch... ✓ success" >&2
         else
             local code=$?
             case $code in
@@ -194,7 +192,7 @@ replay_all_patches() {
                 4) status="empty" ;;
                 *) status="unknown" ;;
             esac
-            echo "  ✗ Failed: $status"
+            echo "Replaying $branch... ✗ $status" >&2
         fi
 
         results+=("$branch:$status")
@@ -288,26 +286,24 @@ integrate_patches() {
     local integrated=()
     local failed=()
 
-    echo "Integrating ${#viable_patches[@]} viable patches..."
+    echo "Integrating ${#viable_patches[@]} viable patches..." >&2
 
     for branch_name in "${viable_patches[@]}"; do
         local tmp_ref="refs/patchstack/tmp/$branch_name"
 
-        echo "  Integrating $branch_name..."
-
         # Create squash commit
         local squash_sha
         if squash_sha=$(create_squash_commit "$branch_name" "$current_tip" "$tmp_ref"); then
-            echo "    ✓ Integrated"
+            echo "Integrating $branch_name... ✓ integrated" >&2
             current_tip="$squash_sha"
             integrated+=("$branch_name")
         else
             local code=$?
             if [[ $code -eq 2 ]]; then
-                echo "    ✗ Integration conflict"
+                echo "Integrating $branch_name... ✗ integration-conflict" >&2
                 failed+=("$branch_name:integration-conflict")
             else
-                echo "    ✗ Integration error"
+                echo "Integrating $branch_name... ✗ error" >&2
                 failed+=("$branch_name:error")
             fi
         fi
@@ -316,12 +312,12 @@ integrate_patches() {
     # Set the integration ref to final tip
     git update-ref "$integration_ref" "$current_tip"
 
-    echo
-    echo "Integration summary:"
-    echo "  Integrated: ${#integrated[@]} patches"
-    echo "  Failed: ${#failed[@]} patches"
+    echo >&2
+    echo "Integration summary:" >&2
+    echo "  Integrated: ${#integrated[@]} patches" >&2
+    echo "  Failed: ${#failed[@]} patches" >&2
 
-    # Output results
+    # Output results (to stdout for parsing)
     for branch in "${integrated[@]}"; do
         echo "integrated:$branch"
     done
@@ -329,6 +325,138 @@ integrate_patches() {
     for result in "${failed[@]}"; do
         echo "failed:$result"
     done
+}
+
+# Calculate which refs need updating based on integration results
+calculate_ref_updates() {
+    local integration_main="refs/patchstack/tmp/main"
+    local new_main_sha
+    new_main_sha=$(git rev-parse "$integration_main" 2>/dev/null) || {
+        echo "ERROR: Integration main not found" >&2
+        return 1
+    }
+
+    # Always update main
+    echo "update:refs/remotes/$PATCH_REMOTE/$MAIN_BRANCH:$new_main_sha"
+
+    # Process each patch
+    local patches
+    readarray -t patches < <(discover_patch_branches)
+
+    for branch in "${patches[@]}"; do
+        local remote_ref="refs/remotes/$PATCH_REMOTE/$branch"
+        local tmp_ref="refs/patchstack/tmp/$branch"
+
+        # Check if patch was successfully replayed
+        if git rev-parse "$tmp_ref" &>/dev/null; then
+            # Check if this patch is already in new main (empty patch)
+            # An empty patch is one where all its changes are already in upstream
+            local tmp_tree
+            local upstream_tree
+            tmp_tree=$(git rev-parse "$tmp_ref^{tree}")
+            upstream_tree=$(git rev-parse "refs/remotes/$UPSTREAM_REMOTE/$MAIN_BRANCH^{tree}")
+            
+            if [[ "$tmp_tree" == "$upstream_tree" ]]; then
+                # Empty patch - delete the ref
+                echo "delete:$remote_ref"
+            else
+                # Update to point to replayed version
+                local new_sha
+                new_sha=$(git rev-parse "$tmp_ref")
+                echo "update:$remote_ref:$new_sha"
+            fi
+        fi
+        # If tmp_ref doesn't exist, patch failed - leave unchanged
+    done
+}
+
+# Record metadata about the sync operation in Git notes
+record_notes() {
+    local ref=$1
+    local old_sha=$2
+    local new_sha=$3
+    local status=$4
+
+    local branch_name=${ref#refs/remotes/"$PATCH_REMOTE"/}
+    local timestamp
+    timestamp=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
+
+    local note="Patchstack sync: $timestamp
+Branch: $branch_name
+Status: $status
+Old SHA: $old_sha
+New SHA: $new_sha
+"
+
+    # Add note to the new commit
+    if [[ "$new_sha" != "deleted" ]]; then
+        git notes --ref=patchstack add -f -m "$note" "$new_sha" 2>/dev/null || true
+    fi
+}
+
+# Apply all calculated ref updates atomically
+apply_ref_updates() {
+    local updates
+    readarray -t updates < <(calculate_ref_updates)
+
+    if [[ ${#updates[@]} -eq 0 ]]; then
+        echo "No ref updates needed"
+        return 0
+    fi
+
+    echo "Applying ${#updates[@]} ref updates..."
+
+    # Build list of updates for atomic transaction
+    local update_cmds=()
+
+    for update in "${updates[@]}"; do
+        local action=${update%%:*}
+        local rest=${update#*:}
+
+        if [[ "$action" == "update" ]]; then
+            local ref=${rest%%:*}
+            local new_sha=${rest#*:}
+            local old_sha
+            old_sha=$(git rev-parse "$ref" 2>/dev/null || echo "")
+
+            echo "  Updating $ref"
+
+            # Prepare update-ref command
+            if [[ -n "$old_sha" ]]; then
+                update_cmds+=("update $ref $new_sha $old_sha")
+            else
+                update_cmds+=("create $ref $new_sha")
+            fi
+
+            # Record notes
+            record_notes "$ref" "$old_sha" "$new_sha" "updated"
+
+        elif [[ "$action" == "delete" ]]; then
+            local ref=$rest
+            local old_sha
+            old_sha=$(git rev-parse "$ref" 2>/dev/null || echo "")
+
+            echo "  Deleting $ref"
+
+            if [[ -n "$old_sha" ]]; then
+                update_cmds+=("delete $ref $old_sha")
+                record_notes "$ref" "$old_sha" "deleted" "empty"
+            fi
+        fi
+    done
+
+    # Execute atomic update
+    if [[ ${#update_cmds[@]} -gt 0 ]]; then
+        if printf '%s\n' "${update_cmds[@]}" | git update-ref --stdin; then
+            echo "✓ All refs updated successfully"
+            return 0
+        else
+            echo "✗ Ref update failed"
+            return 1
+        fi
+    fi
+
+    return 0
 }
 
 # List command: show all patch branches
@@ -380,37 +508,80 @@ cmd_sync() {
     echo "Viable patches: $viable"
     echo
 
+    # Phase 3: Integration
     if [[ $viable -eq 0 ]]; then
-        echo "No viable patches to integrate"
+        echo "📦 Phase 3: No patches to integrate"
         echo
-        echo "Replay summary:"
-        for result in "${replay_results[@]}"; do
-            echo "  $result"
-        done
-        return 0
+        # Still need to handle empty patches and update refs
+    else
+        echo "📦 Phase 3: Integrating patches into new main"
+        # Capture integration results but don't use them (output goes to stderr)
+        integrate_patches > /dev/null
+        echo
     fi
 
-    # Phase 3: Integration
-    echo "📦 Phase 3: Integrating patches into new main"
-    local integration_output
-    integration_output=$(integrate_patches)
-
-    # Display integration output (non-result lines)
-    echo "$integration_output" | grep -v "^integrated:" | grep -v "^failed:" || true
+    # Phase 4: Update refs (always run to handle empty patches)
+    echo "🔄 Phase 4: Updating local refs"
+    
+    # Check if we have viable patches or only need to clean up
+    if [[ $viable -gt 0 ]]; then
+        if ! apply_ref_updates; then
+            echo "ERROR: Failed to update refs"
+            return 1
+        fi
+    else
+        # No viable patches, but we might need to delete empty patch refs
+        # For empty patches, we need to manually create delete updates
+        local has_empty=false
+        for result in "${replay_results[@]}"; do
+            if [[ "$result" == *:empty ]]; then
+                has_empty=true
+                break
+            fi
+        done
+        
+        if [[ "$has_empty" == "true" ]]; then
+            echo "Deleting empty patch refs..."
+            local update_cmds=()
+            for result in "${replay_results[@]}"; do
+                if [[ "$result" == *:empty ]]; then
+                    local branch=${result%%:*}
+                    local ref="refs/remotes/$PATCH_REMOTE/$branch"
+                    local old_sha
+                    old_sha=$(git rev-parse "$ref" 2>/dev/null || echo "")
+                    
+                    if [[ -n "$old_sha" ]]; then
+                        echo "  Deleting $ref"
+                        update_cmds+=("delete $ref $old_sha")
+                        record_notes "$ref" "$old_sha" "deleted" "empty"
+                    fi
+                fi
+            done
+            
+            if [[ ${#update_cmds[@]} -gt 0 ]]; then
+                if printf '%s\n' "${update_cmds[@]}" | git update-ref --stdin; then
+                    echo "✓ Empty patch refs deleted"
+                else
+                    echo "✗ Failed to delete refs"
+                    return 1
+                fi
+            fi
+        else
+            echo "No ref updates needed"
+        fi
+    fi
     echo
 
     # Final summary
     echo "==================================="
-    echo "📊 Sync Summary"
+    echo "📊 Sync Complete"
     echo "==================================="
     echo
-    echo "Replay results:"
-    for result in "${replay_results[@]}"; do
-        echo "  $result"
-    done
-    echo
-    echo "Integration results:"
-    echo "$integration_output" | grep "^integrated:\|^failed:" || true
+    if [[ $viable -gt 0 ]]; then
+        echo "Local refs updated. Ready to push."
+    else
+        echo "No patches integrated. Cleaned up empty patches."
+    fi
 }
 
 # Usage information
