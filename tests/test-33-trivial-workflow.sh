@@ -12,11 +12,14 @@ echo
 
 # Create a test directory
 TEST_DIR=$(mktemp -d)
-cd "$TEST_DIR"
 
-# Configure git
-git config --global user.email "test@patchstack.test" 2>/dev/null || true
-git config --global user.name "Test User" 2>/dev/null || true
+# Cleanup function
+cleanup() {
+    rm -rf "$TEST_DIR"
+}
+trap cleanup EXIT
+
+cd "$TEST_DIR"
 
 ### Setup: Create upstream and fork
 echo "### Setup: Creating upstream and fork repositories"
@@ -86,7 +89,6 @@ if git ls-tree --name-only origin/main | grep -q "a.txt" && \
 else
     echo "✗ origin/main missing expected files"
     git ls-tree --name-only origin/main
-    rm -rf "$TEST_DIR"
     exit 1
 fi
 
@@ -100,7 +102,6 @@ else
     echo "✗ Branch a was modified unexpectedly"
     echo "  Before: $sha_a_before"
     echo "  After: $sha_a_after"
-    rm -rf "$TEST_DIR"
     exit 1
 fi
 
@@ -110,7 +111,6 @@ else
     echo "✗ Branch b was modified unexpectedly"
     echo "  Before: $sha_b_before"
     echo "  After: $sha_b_after"
-    rm -rf "$TEST_DIR"
     exit 1
 fi
 
@@ -142,7 +142,6 @@ if git ls-tree --name-only origin/main | grep -q "CHANGELOG.md"; then
     echo "✓ origin/main contains CHANGELOG.md"
 else
     echo "✗ origin/main missing CHANGELOG.md"
-    rm -rf "$TEST_DIR"
     exit 1
 fi
 
@@ -151,7 +150,6 @@ if git ls-tree --name-only origin/a | grep -q "CHANGELOG.md"; then
     echo "✓ Branch a includes CHANGELOG.md (rebased)"
 else
     echo "✗ Branch a missing CHANGELOG.md"
-    rm -rf "$TEST_DIR"
     exit 1
 fi
 
@@ -159,7 +157,6 @@ if git ls-tree --name-only origin/b | grep -q "CHANGELOG.md"; then
     echo "✓ Branch b includes CHANGELOG.md (rebased)"
 else
     echo "✗ Branch b missing CHANGELOG.md"
-    rm -rf "$TEST_DIR"
     exit 1
 fi
 
@@ -195,7 +192,6 @@ if git show origin/main:a.txt | grep -q "Modification"; then
     echo "✓ origin/main contains modification from a"
 else
     echo "✗ origin/main missing modification from a"
-    rm -rf "$TEST_DIR"
     exit 1
 fi
 
@@ -229,7 +225,6 @@ git fetch origin
 # Check if branch b was deleted
 if git rev-parse origin/b &>/dev/null; then
     echo "✗ Branch b still exists (should be deleted)"
-    rm -rf "$TEST_DIR"
     exit 1
 else
     echo "✓ Branch b was deleted (integrated upstream)"
@@ -240,7 +235,6 @@ if git rev-parse origin/a &>/dev/null; then
     echo "✓ Branch a still exists"
 else
     echo "✗ Branch a was unexpectedly deleted"
-    rm -rf "$TEST_DIR"
     exit 1
 fi
 
@@ -249,7 +243,6 @@ if git show origin/main:a.txt | grep -q "Modification"; then
     echo "✓ origin/main still has modifications from a"
 else
     echo "✗ origin/main missing modifications from a"
-    rm -rf "$TEST_DIR"
     exit 1
 fi
 
@@ -257,6 +250,5 @@ echo
 echo "=== All scenarios passed ==="
 
 # Cleanup
-rm -rf "$TEST_DIR"
 
 echo "✓ Test passed: trivial workflow"
