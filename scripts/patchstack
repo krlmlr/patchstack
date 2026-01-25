@@ -146,13 +146,7 @@ replay_patch_commits() {
         return 3
     fi
 
-    if [[ $empty -eq 1 ]]; then
-        # At least one commit was empty during replay
-        git branch -D "$tmp_branch" 2>/dev/null || true
-        return 4
-    fi
-
-    # Update the temporary ref
+    # Always update the temporary ref (even for potentially empty patches)
     git update-ref "$tmp_ref" "$tmp_branch" >/dev/null 2>&1
     git branch -D "$tmp_branch" >/dev/null 2>&1 || true
 
@@ -162,9 +156,9 @@ replay_patch_commits() {
     replayed_tree=$(git rev-parse "$tmp_ref^{tree}")
     upstream_tree=$(git rev-parse "$upstream_ref^{tree}")
 
-    if [[ "$replayed_tree" == "$upstream_tree" ]]; then
-        # Empty patch
-        git update-ref -d "$tmp_ref"
+    if [[ "$replayed_tree" == "$upstream_tree" ]] || [[ $empty -eq 1 ]]; then
+        # Empty patch - but keep the tmp ref so calculate_ref_updates can detect it
+        # and generate a delete action for the push
         return 4
     fi
 
@@ -330,43 +324,53 @@ integrate_patches() {
 # Calculate which refs need updating based on integration results
 calculate_ref_updates() {
     local integration_main="refs/patchstack/tmp/main"
-    local new_main_sha
-    new_main_sha=$(git rev-parse "$integration_main" 2>/dev/null) || {
-        echo "ERROR: Integration main not found" >&2
-        return 1
-    }
+    
+    # Check if integration main exists (it won't if there are no viable patches)
+    if git rev-parse "$integration_main" &>/dev/null 2>&1; then
+        local new_main_sha
+        new_main_sha=$(git rev-parse "$integration_main")
+        # Update main
+        echo "update:refs/remotes/$PATCH_REMOTE/$MAIN_BRANCH:$new_main_sha"
+    fi
 
-    # Always update main
-    echo "update:refs/remotes/$PATCH_REMOTE/$MAIN_BRANCH:$new_main_sha"
+    # Process each replayed patch by looking at temporary refs
+    # (Don't use discover_patch_branches here because origin/main has been updated
+    # and patches are based on upstream, not on the new integrated main)
+    local tmp_refs
+    readarray -t tmp_refs < <(git for-each-ref --format='%(refname)' 'refs/patchstack/tmp/')
 
-    # Process each patch
-    local patches
-    readarray -t patches < <(discover_patch_branches)
+    verbose_echo "calculate_ref_updates: found ${#tmp_refs[@]} temp refs"
 
-    for branch in "${patches[@]}"; do
+    for tmp_ref in "${tmp_refs[@]}"; do
+        # Skip the main ref
+        [[ "$tmp_ref" == "$integration_main" ]] && continue
+
+        # Extract branch name from refs/patchstack/tmp/BRANCH
+        local branch=${tmp_ref#refs/patchstack/tmp/}
         local remote_ref="refs/remotes/$PATCH_REMOTE/$branch"
-        local tmp_ref="refs/patchstack/tmp/$branch"
 
-        # Check if patch was successfully replayed
-        if git rev-parse "$tmp_ref" &>/dev/null; then
-            # Check if this patch is already in new main (empty patch)
-            # An empty patch is one where all its changes are already in upstream
-            local tmp_tree
-            local upstream_tree
-            tmp_tree=$(git rev-parse "$tmp_ref^{tree}")
-            upstream_tree=$(git rev-parse "refs/remotes/$UPSTREAM_REMOTE/$MAIN_BRANCH^{tree}")
-            
-            if [[ "$tmp_tree" == "$upstream_tree" ]]; then
-                # Empty patch - delete the ref
-                echo "delete:$remote_ref"
-            else
-                # Update to point to replayed version
-                local new_sha
-                new_sha=$(git rev-parse "$tmp_ref")
-                echo "update:$remote_ref:$new_sha"
-            fi
+        verbose_echo "calculate_ref_updates: checking branch=$branch, tmp_ref=$tmp_ref"
+
+        # Check if this patch is already in new main (empty patch)
+        # An empty patch is one where all its changes are already in upstream
+        local tmp_tree
+        local upstream_tree
+        tmp_tree=$(git rev-parse "$tmp_ref^{tree}")
+        upstream_tree=$(git rev-parse "refs/remotes/$UPSTREAM_REMOTE/$MAIN_BRANCH^{tree}")
+        
+        verbose_echo "calculate_ref_updates: tmp_tree=$tmp_tree, upstream_tree=$upstream_tree"
+        
+        if [[ "$tmp_tree" == "$upstream_tree" ]]; then
+            # Empty patch - delete the ref
+            verbose_echo "calculate_ref_updates: $branch is empty, deleting"
+            echo "delete:$remote_ref"
+        else
+            # Update to point to replayed version
+            local new_sha
+            new_sha=$(git rev-parse "$tmp_ref")
+            verbose_echo "calculate_ref_updates: $branch updated to $new_sha"
+            echo "update:$remote_ref:$new_sha"
         fi
-        # If tmp_ref doesn't exist, patch failed - leave unchanged
     done
 }
 
@@ -459,6 +463,194 @@ apply_ref_updates() {
     return 0
 }
 
+# Capture the current state of remote tracking refs before updating
+# Output format: ref:old_sha
+capture_ref_state() {
+    local updates
+    readarray -t updates < <(calculate_ref_updates)
+
+    for update in "${updates[@]}"; do
+        local action=${update%%:*}
+        local rest=${update#*:}
+
+        if [[ "$action" = "update" ]]; then
+            local ref=${rest%%:*}
+            local old_sha
+            old_sha=$(git rev-parse "$ref" 2>/dev/null || echo "")
+            echo "$ref:$old_sha"
+        elif [[ "$action" = "delete" ]]; then
+            local ref=$rest
+            local old_sha
+            old_sha=$(git rev-parse "$ref" 2>/dev/null || echo "")
+            echo "$ref:$old_sha"
+        fi
+    done
+}
+
+# Build refspec list for atomic push with force-with-lease
+# Takes the pre-update ref state as input
+build_push_refspecs() {
+    local refspecs=()
+    local lease_options=()
+
+    # Get all updated refs from previous phase
+    local updates
+    readarray -t updates < <(calculate_ref_updates)
+
+    verbose_echo "calculate_ref_updates returned ${#updates[@]} updates:"
+    for u in "${updates[@]}"; do
+        verbose_echo "  $u"
+    done
+
+    # Build a map of old SHAs from the captured state
+    declare -A old_shas
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        local ref=${line%%:*}
+        local old_sha=${line#*:}
+        old_shas["$ref"]=$old_sha
+        verbose_echo "Captured old SHA for $ref: $old_sha"
+    done < /tmp/patchstack-ref-state.$$
+
+    for update in "${updates[@]}"; do
+        local action=${update%%:*}
+        local rest=${update#*:}
+
+        if [[ "$action" = "update" ]]; then
+            local ref=${rest%%:*}
+            local new_sha=${rest#*:}
+            local old_sha="${old_shas[$ref]}"
+
+            verbose_echo "Processing update: ref=$ref, new=$new_sha, old=$old_sha"
+
+            # Extract branch name from ref
+            local branch_name=${ref#refs/remotes/"$PATCH_REMOTE"/}
+
+            # Add refspec: local_sha:remote_ref
+            refspecs+=("$new_sha:refs/heads/$branch_name")
+
+            # Add force-with-lease for this ref
+            if [[ -n "$old_sha" ]]; then
+                lease_options+=("--force-with-lease=refs/heads/$branch_name:$old_sha")
+            fi
+
+        elif [[ "$action" = "delete" ]]; then
+            local ref=$rest
+            local branch_name=${ref#refs/remotes/"$PATCH_REMOTE"/}
+            local old_sha="${old_shas[$ref]}"
+
+            verbose_echo "Processing delete: ref=$ref, old=$old_sha"
+
+            # Add deletion refspec: :remote_ref
+            refspecs+=(":refs/heads/$branch_name")
+
+            # Add force-with-lease for deletion
+            if [[ -n "$old_sha" ]]; then
+                lease_options+=("--force-with-lease=refs/heads/$branch_name:$old_sha")
+            fi
+        fi
+    done
+
+    # Output refspecs and lease options
+    for spec in "${refspecs[@]}"; do
+        echo "refspec:$spec"
+    done
+
+    for opt in "${lease_options[@]}"; do
+        echo "lease:$opt"
+    done
+}
+
+# Executes the atomic push with all refspecs
+push_refs() {
+    echo "Preparing push..."
+
+    local pushspecs
+    readarray -t pushspecs < <(build_push_refspecs)
+
+    if [[ ${#pushspecs[@]} -eq 0 ]]; then
+        echo "No changes to push"
+        return 0
+    fi
+
+    # Debug: show pushspecs
+    verbose_echo "Pushspecs generated:"
+    for ps in "${pushspecs[@]}"; do
+        verbose_echo "  $ps"
+    done
+
+    # Parse refspecs and lease options
+    local refspecs=()
+    local lease_opts=()
+
+    for spec in "${pushspecs[@]}"; do
+        local type=${spec%%:*}
+        local value=${spec#*:}
+
+        if [[ "$type" = "refspec" ]]; then
+            refspecs+=("$value")
+        elif [[ "$type" = "lease" ]]; then
+            lease_opts+=("$value")
+        fi
+    done
+
+    echo "Pushing ${#refspecs[@]} refs to $PATCH_REMOTE..."
+
+    # Debug: show what we're pushing
+    verbose_echo "Refspecs:"
+    for rs in "${refspecs[@]}"; do
+        verbose_echo "  $rs"
+    done
+    verbose_echo "Lease options:"
+    for lo in "${lease_opts[@]}"; do
+        verbose_echo "  $lo"
+    done
+
+    # Build push command
+    local push_cmd=(git push --atomic)
+
+    # Add lease options
+    for opt in "${lease_opts[@]}"; do
+        push_cmd+=("$opt")
+    done
+
+    # Add remote
+    push_cmd+=("$PATCH_REMOTE")
+
+    # Add refspecs
+    for spec in "${refspecs[@]}"; do
+        push_cmd+=("$spec")
+    done
+
+    # Execute push
+    if "${push_cmd[@]}" 2>&1; then
+        echo "✓ Push successful"
+        return 0
+    else
+        local code=$?
+        echo "✗ Push failed (exit code: $code)"
+        echo
+        echo "This usually means:"
+        echo "  - Someone else pushed to origin while you were syncing"
+        echo "  - Run 'git fetch' and try sync again"
+        echo "  - Or check remote permissions"
+        return 1
+    fi
+}
+
+# Pushes Git notes to remote
+push_notes() {
+    echo "Pushing notes..."
+
+    if git push "$PATCH_REMOTE" refs/notes/patchstack 2>&1; then
+        echo "✓ Notes pushed"
+        return 0
+    else
+        echo "⚠ Notes push failed (non-fatal)"
+        return 0  # Don't fail sync if notes fail
+    fi
+}
+
 # List command: show all patch branches
 cmd_list() {
     local patches
@@ -520,6 +712,10 @@ cmd_sync() {
         echo
     fi
 
+    # Capture ref state BEFORE Phase 4 updates them (for force-with-lease)
+    local ref_state_file="/tmp/patchstack-ref-state.$$"
+    capture_ref_state > "$ref_state_file"
+
     # Phase 4: Update refs (always run to handle empty patches)
     echo "🔄 Phase 4: Updating local refs"
     
@@ -572,16 +768,29 @@ cmd_sync() {
     fi
     echo
 
+    # Phase 5: Push to remote
+    echo "🚀 Phase 5: Pushing to $PATCH_REMOTE"
+    if ! push_refs; then
+        echo "ERROR: Push failed"
+        echo "Local refs updated but remote unchanged"
+        rm -f "$ref_state_file"
+        return 1
+    fi
+
+    # Clean up ref state file
+    rm -f "$ref_state_file"
+
+    # Push notes (non-fatal)
+    push_notes
+    echo
+
     # Final summary
     echo "==================================="
     echo "📊 Sync Complete"
     echo "==================================="
     echo
-    if [[ $viable -gt 0 ]]; then
-        echo "Local refs updated. Ready to push."
-    else
-        echo "No patches integrated. Cleaned up empty patches."
-    fi
+    echo "✓ All patches synced successfully"
+    echo "✓ Remote updated"
 }
 
 # Usage information

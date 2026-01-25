@@ -41,13 +41,13 @@ else
     exit 1
 fi
 
-# Verify temporary ref does not exist (empty patch)
+# Verify temporary ref exists (needed for generating delete action during push)
 if git show-ref -q refs/patchstack/tmp/patch-feature; then
-    echo "✗ Temporary ref exists but should not (empty patch)"
+    echo "✓ Temporary ref exists (needed for push deletion)"
+else
+    echo "✗ Temporary ref should exist for empty patch (needed for push)"
     cleanup_test_env
     exit 1
-else
-    echo "✓ Temporary ref does not exist (expected for empty patch)"
 fi
 
 # Cleanup

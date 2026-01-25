@@ -106,22 +106,24 @@
 
 **Build:**
 
-- [ ] Implement atomic push with multiple refspecs
+- [x] Implement atomic push with multiple refspecs
     - Push main with force-with-lease
     - Push all viable patch branches with force-with-lease
     - Push deletions for empty branches
     - Push notes
-- [ ] Use `git push --atomic --force-with-lease` for all-or-nothing
-- [ ] Handle push rejection (concurrent update) gracefully
+- [x] Use `git push --atomic --force-with-lease` for all-or-nothing
+- [x] Handle push rejection (concurrent update) gracefully
 
 **Test:**
 
-- [ ] Test: atomic push succeeds with all refs updated together
-- [ ] Test: atomic push with lease failure aborts all updates
-- [ ] Test: verify remote state after successful push
-- [ ] Test: verify notes pushed to remote
+- [x] Test: atomic push succeeds with all refs updated together
+- [x] Test: atomic push with lease failure aborts all updates
+- [x] Test: verify remote state after successful push
+- [x] Test: verify notes pushed to remote
 
 **Detailed Plan:** See [plan/150-atomic-push.md](plan/150-atomic-push.md)
+
+**Status:** ✓ Complete
 
 ### Phase 1.6: End-to-End Scenarios
 
