@@ -43,6 +43,158 @@ discover_patch_branches() {
     fi
 }
 
+# Replay patch commits onto upstream/main
+# Returns: 0=success, 1=error, 2=no-changes, 3=conflict, 4=empty
+replay_patch_commits() {
+    local branch_name=$1
+    local remote_ref="refs/remotes/$PATCH_REMOTE/$branch_name"
+    local upstream_ref="refs/remotes/$UPSTREAM_REMOTE/$MAIN_BRANCH"
+    local origin_main="refs/remotes/$PATCH_REMOTE/$MAIN_BRANCH"
+    local tmp_ref="refs/patchstack/tmp/$branch_name"
+    local tmp_branch="patchstack-tmp-$branch_name"
+
+    # Check if branch has commits beyond origin/main
+    if [[ "$(git rev-parse "$remote_ref")" == "$(git rev-parse "$origin_main")" ]]; then
+        echo "WARNING: $branch_name has no commits beyond main" >&2
+        return 2
+    fi
+
+    # Get list of commits to replay (between origin/main and patch branch)
+    local commits
+    if ! commits=$(git rev-list --reverse "$origin_main..$remote_ref" 2>&1); then
+        echo "ERROR: Cannot list commits for $branch_name" >&2
+        return 1
+    fi
+
+    # Check if there are any commits
+    if [[ -z "$commits" ]]; then
+        echo "WARNING: $branch_name has no commits to replay" >&2
+        return 2
+    fi
+
+    # Create temporary branch starting from upstream/main
+    if ! git branch -f "$tmp_branch" "$upstream_ref" 2>/dev/null; then
+        echo "ERROR: Cannot create temporary branch" >&2
+        return 1
+    fi
+
+    # Save current branch/commit
+    local current_branch
+    current_branch=$(git symbolic-ref --short HEAD 2>/dev/null || echo "")
+
+    # Checkout temporary branch
+    if ! git checkout -q "$tmp_branch" 2>/dev/null; then
+        git branch -D "$tmp_branch" 2>/dev/null || true
+        return 1
+    fi
+
+    # Replay each commit
+    local failed=0
+    local empty=0
+    for commit_sha in $commits; do
+        # Check if this is a merge commit
+        if git rev-parse "$commit_sha^2" &>/dev/null; then
+            # Merge commit - create a single commit with the merge's tree
+            local merge_tree
+            merge_tree=$(git rev-parse "$commit_sha^{tree}")
+            local msg
+            msg=$(git log -1 --format=%B "$commit_sha")
+
+            # Create a commit with the merge's tree
+            local new_commit
+            if ! new_commit=$(git commit-tree "$merge_tree" -p HEAD -m "$msg" 2>&1); then
+                failed=1
+                break
+            fi
+            # Update HEAD to the new commit
+            git reset --hard "$new_commit" &>/dev/null
+        else
+            # Regular commit - cherry-pick
+            if ! git cherry-pick "$commit_sha" &>/dev/null 2>&1; then
+                # Check if it's an empty commit (changes already in upstream)
+                if git diff-index --quiet HEAD 2>/dev/null; then
+                    # Working tree is clean - this is an empty commit
+                    git cherry-pick --abort &>/dev/null 2>&1 || true
+                    empty=1
+                else
+                    # Real conflict
+                    failed=1
+                    break
+                fi
+            fi
+        fi
+    done
+
+    # Return to original branch/commit
+    if [[ -n "$current_branch" ]]; then
+        git checkout -q "$current_branch" 2>/dev/null || true
+    fi
+
+    if [[ $failed -eq 1 ]]; then
+        # Replay failed (conflict)
+        git cherry-pick --abort &>/dev/null 2>&1 || true
+        git branch -D "$tmp_branch" 2>/dev/null || true
+        return 3
+    fi
+
+    if [[ $empty -eq 1 ]]; then
+        # At least one commit was empty during replay
+        git branch -D "$tmp_branch" 2>/dev/null || true
+        return 4
+    fi
+
+    # Update the temporary ref
+    git update-ref "$tmp_ref" "$tmp_branch"
+    git branch -D "$tmp_branch" 2>/dev/null || true
+
+    # Check if patch is empty (replayed tree equals upstream tree)
+    local replayed_tree
+    local upstream_tree
+    replayed_tree=$(git rev-parse "$tmp_ref^{tree}")
+    upstream_tree=$(git rev-parse "$upstream_ref^{tree}")
+
+    if [[ "$replayed_tree" == "$upstream_tree" ]]; then
+        # Empty patch
+        git update-ref -d "$tmp_ref"
+        return 4
+    fi
+
+    return 0
+}
+
+# Replay all discovered patches
+replay_all_patches() {
+    local branches
+    readarray -t branches < <(discover_patch_branches)
+
+    local results=()
+
+    for branch in "${branches[@]}"; do
+        echo "Replaying $branch..."
+
+        local status
+        if replay_patch_commits "$branch"; then
+            status="success"
+            echo "  ✓ Replayed successfully"
+        else
+            local code=$?
+            case $code in
+                1) status="invalid" ;;
+                2) status="no-changes" ;;
+                3) status="conflict" ;;
+                4) status="empty" ;;
+                *) status="unknown" ;;
+            esac
+            echo "  ✗ Failed: $status"
+        fi
+
+        results+=("$branch:$status")
+    done
+
+    # Return results for later processing
+    printf '%s\n' "${results[@]}"
+}
+
 # List command: show all patch branches
 cmd_list() {
     local patches
@@ -60,10 +212,31 @@ cmd_list() {
     echo "Found $count patch branches"
 }
 
-# Sync command: synchronize patch stack with upstream (placeholder)
+# Sync command: synchronize patch stack with upstream
 cmd_sync() {
-    echo "Error: sync command not yet implemented" >&2
-    exit 1
+    echo "Starting patchstack sync..."
+
+    # Discover patches
+    local patches
+    readarray -t patches < <(discover_patch_branches)
+    echo "Found ${#patches[@]} patch branches"
+
+    if [[ ${#patches[@]} -eq 0 ]]; then
+        echo "No patches to sync"
+        return 0
+    fi
+
+    # Replay patches
+    echo
+    local results
+    readarray -t results < <(replay_all_patches)
+
+    # Summary
+    echo
+    echo "Replay summary:"
+    for result in "${results[@]}"; do
+        echo "  $result"
+    done
 }
 
 # Usage information

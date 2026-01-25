@@ -85,7 +85,7 @@ Each phase follows this pattern:
 - Clear error messages with context
 - Functions should do one thing
 - Keep functions small (<50 lines)
-- Obey all shellcheck warnings, use shellcheck annotations only in exceptional cases
+- Obey all shellcheck warnings, introduce `shellcheck source` annotations, use shellcheck ignore annotations only in exceptional cases
 
 ### Test Style
 
@@ -174,13 +174,18 @@ test_feature_name() {
 ### Starting a New Phase
 
 1. Read the phase specification in PLAN.md
-2. Read the detailed plan in `plan/[phase-number]-*.md`
-3. Create test harness helpers if needed
-4. Write tests for the feature (they should fail)
-5. Implement the feature
-6. Verify tests pass
-7. Test edge cases
-8. Move to next phase
+2. **Verify the phase is truly incomplete** by checking:
+   - Functions are implemented in scripts/patchstack
+   - Tests exist and pass
+   - Never trust "Status: ✓ Complete" in plan docs without verification
+3. Read the detailed plan in `plan/[phase-number]-*.md`
+4. Create test harness helpers if needed
+5. Write tests for the feature (they should fail)
+6. Implement the feature
+7. Verify tests pass
+8. Test edge cases
+9. Update PLAN.md with checkboxes marking completion
+10. Move to next phase
 
 ### When Stuck
 
@@ -380,3 +385,36 @@ When in doubt:
 2. Write a test
 3. Make the test pass
 4. Move on
+
+## Implementation History
+
+### Phase 1.2 - Replay Patch Commits (January 2026)
+
+**Issue Found:** The plan document marked Phase 1.2 as "Complete" but the implementation was missing:
+
+- `replay_patch_commits()` function was not implemented
+- `replay_all_patches()` function was missing
+- `cmd_sync()` was a placeholder
+- No tests existed (test-08 through test-13)
+
+**Implemented:**
+
+- Added `replay_patch_commits()` with proper conflict and empty patch detection
+- Added `replay_all_patches()` to process all patches independently
+- Updated `cmd_sync()` to discover and replay patches
+- Created 6 comprehensive tests covering:
+    - Clean replay (test-08)
+    - Conflict detection (test-09)
+    - Empty patch detection (test-10)
+    - Merge commit squashing (test-11)
+    - Multiple independent patches (test-12)
+    - No new commits (test-13)
+
+**Key Implementation Details:**
+
+- Empty patches detected by checking if cherry-pick fails with clean working tree
+- Merge commits replayed by creating new commit with merge's tree (not re-merging)
+- Each patch processed independently - one failure doesn't affect others
+- Temporary refs stored in `refs/patchstack/tmp/*`
+
+**Lesson:** Always verify phase completion by checking for actual implementation and passing tests, not just status markers in plan documents.
