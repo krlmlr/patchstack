@@ -216,7 +216,7 @@ Patchstack requires:
 ### Platform Support
 
 - ✅ **Linux** - Fully supported
-- ✅ **macOS** - Fully supported  
+- ✅ **macOS** - Fully supported (with `bash` installed via Homebrew)
 - ✅ **WSL/Cygwin** - Should work (not extensively tested)
 
 No additional dependencies are required. Patchstack uses only standard POSIX utilities available on all Unix-like systems.
