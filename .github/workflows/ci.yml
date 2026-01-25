@@ -35,6 +35,7 @@ jobs:
           bash -n scripts/patchstack
 
       - name: Lint with shellcheck
+        if: runner.os == 'Linux'
         run: |
           shellcheck scripts/patchstack
 
