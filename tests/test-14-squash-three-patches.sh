@@ -37,7 +37,7 @@ upstream_sha=$(git rev-parse upstream/main)
 integration_sha=$(git rev-parse refs/patchstack/tmp/main)
 commit_count=$(git rev-list --count "$upstream_sha..$integration_sha")
 
-if [ "$commit_count" != "3" ]; then
+if [[ "$commit_count" != "3" ]]; then
     echo "ERROR: Expected 3 commits, got $commit_count"
     cleanup_test_env
     exit 1
@@ -47,19 +47,19 @@ echo "✓ Integration has 3 commits beyond upstream"
 # Check that files from all patches exist in integration
 git checkout -q refs/patchstack/tmp/main
 
-if [ ! -f "file-patch-alpha.txt" ]; then
+if [[ ! -f "file-patch-alpha.txt" ]]; then
     echo "ERROR: Missing file-patch-alpha.txt"
     cleanup_test_env
     exit 1
 fi
 
-if [ ! -f "file-patch-beta.txt" ]; then
+if [[ ! -f "file-patch-beta.txt" ]]; then
     echo "ERROR: Missing file-patch-beta.txt"
     cleanup_test_env
     exit 1
 fi
 
-if [ ! -f "file-patch-gamma.txt" ]; then
+if [[ ! -f "file-patch-gamma.txt" ]]; then
     echo "ERROR: Missing file-patch-gamma.txt"
     cleanup_test_env
     exit 1

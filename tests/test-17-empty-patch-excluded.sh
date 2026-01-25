@@ -57,7 +57,7 @@ fi
 integration_sha=$(git rev-parse refs/patchstack/tmp/main)
 commit_count=$(git rev-list --count upstream/main.."$integration_sha")
 
-if [ "$commit_count" != "2" ]; then
+if [[ "$commit_count" != "2" ]]; then
     echo "ERROR: Expected 2 commits (alpha + charlie), got $commit_count"
     cleanup_test_env
     exit 1
@@ -76,14 +76,14 @@ echo "✓ patch-empty marked as empty"
 # Verify alpha and charlie are in integration by checking file contents
 git checkout -q refs/patchstack/tmp/main
 
-if [ ! -f "feature-a.txt" ] || ! grep -q "feature-a" feature-a.txt; then
+if [[ ! -f "feature-a.txt" ]] || ! grep -q "feature-a" feature-a.txt; then
     echo "ERROR: patch-alpha should be integrated"
     cleanup_test_env
     exit 1
 fi
 echo "✓ patch-alpha is integrated"
 
-if [ ! -f "feature-c.txt" ] || ! grep -q "feature-c" feature-c.txt; then
+if [[ ! -f "feature-c.txt" ]] || ! grep -q "feature-c" feature-c.txt; then
     echo "ERROR: patch-charlie should be integrated"
     cleanup_test_env
     exit 1

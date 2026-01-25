@@ -90,6 +90,8 @@ replay_patch_commits() {
     # Save current branch/commit
     local current_branch
     current_branch=$(git symbolic-ref --short HEAD 2>/dev/null || echo "")
+    local current_head
+    current_head=$(git rev-parse HEAD 2>/dev/null)
 
     # Checkout temporary branch
     if ! git checkout -q "$tmp_branch" 2>/dev/null; then
@@ -137,6 +139,8 @@ replay_patch_commits() {
     # Return to original branch/commit
     if [[ -n "$current_branch" ]]; then
         git checkout -q "$current_branch" 2>/dev/null || true
+    elif [[ -n "$current_head" ]]; then
+        git checkout -q "$current_head" 2>/dev/null || true
     fi
 
     if [[ $failed -eq 1 ]]; then
@@ -208,6 +212,8 @@ create_squash_commit() {
     # Save current position
     local current_branch
     current_branch=$(git symbolic-ref --short HEAD 2>/dev/null || echo "")
+    local current_head
+    current_head=$(git rev-parse HEAD 2>/dev/null)
     local tmp_branch="patchstack-integrate-$branch_name"
 
     # Create integration branch from parent ref
@@ -226,7 +232,12 @@ create_squash_commit() {
         # Conflict during integration
         git merge --abort >/dev/null 2>&1 || true
         git reset --hard >/dev/null 2>&1 || true
-        git checkout -q "$current_branch" >/dev/null 2>&1 || git checkout -q main >/dev/null 2>&1 || true
+        # Restore original position
+        if [[ -n "$current_branch" ]]; then
+            git checkout -q "$current_branch" >/dev/null 2>&1 || true
+        elif [[ -n "$current_head" ]]; then
+            git checkout -q "$current_head" >/dev/null 2>&1 || true
+        fi
         git branch -D "$tmp_branch" >/dev/null 2>&1 || true
         return 2
     fi
@@ -235,7 +246,12 @@ create_squash_commit() {
     if ! git commit --no-edit >/dev/null 2>&1; then
         # This can happen if there are no changes (shouldn't happen since we already replayed)
         git reset --hard >/dev/null 2>&1 || true
-        git checkout -q "$current_branch" >/dev/null 2>&1 || git checkout -q main >/dev/null 2>&1 || true
+        # Restore original position
+        if [[ -n "$current_branch" ]]; then
+            git checkout -q "$current_branch" >/dev/null 2>&1 || true
+        elif [[ -n "$current_head" ]]; then
+            git checkout -q "$current_head" >/dev/null 2>&1 || true
+        fi
         git branch -D "$tmp_branch" >/dev/null 2>&1 || true
         return 1
     fi
@@ -246,9 +262,9 @@ create_squash_commit() {
 
     # Return to original state
     if [[ -n "$current_branch" ]]; then
-        git checkout -q "$current_branch" >/dev/null 2>&1 || git checkout -q main >/dev/null 2>&1 || true
-    else
-        git checkout -q main >/dev/null 2>&1 || true
+        git checkout -q "$current_branch" >/dev/null 2>&1 || true
+    elif [[ -n "$current_head" ]]; then
+        git checkout -q "$current_head" >/dev/null 2>&1 || true
     fi
     git branch -D "$tmp_branch" >/dev/null 2>&1 || true
 

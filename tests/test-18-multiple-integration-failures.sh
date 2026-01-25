@@ -51,7 +51,7 @@ fi
 integration_sha=$(git rev-parse refs/patchstack/tmp/main)
 commit_count=$(git rev-list --count upstream/main.."$integration_sha")
 
-if [ "$commit_count" != "1" ]; then
+if [[ "$commit_count" != "1" ]]; then
     echo "ERROR: Expected 1 commit (only patch-a), got $commit_count"
     cleanup_test_env
     exit 1
@@ -60,7 +60,7 @@ echo "✓ Integration has 1 commit (only patch-a)"
 
 # Verify patch-a is in integration by checking file content
 git checkout -q refs/patchstack/tmp/main
-if [ ! -f "conflict.txt" ] || ! grep -q "version-a" conflict.txt; then
+if [[ ! -f "conflict.txt" ]] || ! grep -q "version-a" conflict.txt; then
     echo "ERROR: patch-a should be integrated"
     cleanup_test_env
     exit 1
