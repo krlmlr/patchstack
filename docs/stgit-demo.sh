@@ -153,7 +153,7 @@ echo "Modification in a.txt" >> a.txt
 git add -- a.txt
 stg refresh -m "Add a.txt (modified)"
 
-# Push remaining patches back on
+# Apply remaining patches back to stack
 stg push -a
 
 echo "✓ Modified patch a"
@@ -199,8 +199,9 @@ echo
 echo "Checking patch status with --empty flag..."
 stg series --empty
 
-# Check if b is empty now (should show with 0 when empty)
-if stg series --empty 2>&1 | grep -q "0.*b"; then
+# Check if b is empty now by verifying it has no diff content
+# The --empty flag shows "0" prefix for empty patches in the series output
+if ! stg show b 2>/dev/null | grep -q "^diff --git"; then
     echo "✓ Patch b is now empty (merged upstream)"
     # Clean up empty patches manually - this is what patchstack does automatically
     stg delete b 2>/dev/null || echo "  (keeping patch for demonstration)"

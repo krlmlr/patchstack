@@ -27,7 +27,7 @@ Patchstack maintains a long-living fork where:
 StGit maintains patches as:
 
 1. A **single branch** with a **stack of patches** on top
-2. Patches are stored as metadata (refs/patches/\<branch\>/\*)
+2. Patches are stored as metadata (refs/patches/&lt;branch&gt;/*)
 3. Rebasing is done with `stg rebase` or `stg pull`
 4. Merged patches detected with `--merged` flag
 
