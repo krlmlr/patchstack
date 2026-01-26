@@ -90,6 +90,14 @@ If any ref update is rejected, **nothing is updated**.
 
 Deleted empty patch branches have their final tips and disposition recorded in `refs/notes/patchstack`.
 
+### I5. Squash commit traceability
+
+Every squash commit on `origin/main` includes a `Patchstack-Patch:` trailer identifying its source patch branch. This enables:
+
+- Detection of alien commits (commits without traceable origin)
+- Machine-readable provenance for auditing
+- Migration and recovery workflows
+
 ---
 
 ## Git Notes for History Tracking
@@ -289,6 +297,54 @@ Notes record old tip and deletion reason.
 
 ---
 
+## Alien Commit Handling
+
+### Definition
+
+An **alien commit** is any commit on `origin/main` that cannot be traced to:
+
+1. The current `upstream/main` history
+2. A squash commit from a known patch branch (identified via `Patchstack-Patch:` trailer)
+3. A commit recorded in `refs/notes/patchstack` as originating from a prior sync
+
+### Safety Principle
+
+Patchstack **never silently discards commits**. When alien commits exist:
+
+- **Default behavior:** Abort sync with clear error message
+- **With `--delete`:** Proceed and remove aliens (user explicitly acknowledges loss)
+- **With `--dry-run --delete`:** Preview what would be removed
+
+### Commit Traceability
+
+Following conventions from Quilt and StGit, each squash commit includes a machine-readable trailer:
+
+```
+Squash of 3 commits from origin/patch-feature
+
+<original commit messages>
+
+---
+Patchstack-Patch: patch-feature
+```
+
+This trailer:
+
+- Survives rebases and cherry-picks (unlike notes)
+- Is human-readable and grep-able
+- Follows Git trailer conventions
+- Enables automatic detection of patch provenance
+
+### Recovery Workflow
+
+When alien commits are detected:
+
+1. **Review:** `patchstack history` shows provenance of all commits
+2. **Backport:** `patchstack backport` converts aliens to proper patch branches
+3. **Sync:** Normal sync proceeds without data loss
+
+---
+
 ## Failure Modes & Handling
 
 | Failure              | Effect               | Action                               |
@@ -299,6 +355,7 @@ Notes record old tip and deletion reason.
 | Empty patch          | No net effect        | Delete or keep per policy            |
 | Lease failure        | Concurrent update    | Atomic push aborts                   |
 | No atomic support    | Unsafe               | Treat as fatal                       |
+| Alien commits found  | Untracked changes    | Abort unless `--delete` specified    |
 
 ---
 
@@ -352,5 +409,7 @@ This design ensures:
 - empty patches are cleaned up safely
 - race conditions are handled via concurrency + atomic + leases
 - full auditability via Git notes
+- **alien commits are never silently discarded** (abort unless `--delete`)
+- **commit provenance is traceable** via `Patchstack-Patch:` trailers
 
 This document can be used directly as an implementation guide for `scripts/patchstack`.
