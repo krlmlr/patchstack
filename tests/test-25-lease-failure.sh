@@ -33,7 +33,7 @@ git config user.name "Test User"
 # Advance main to simulate another sync
 # Create a new commit on top of main
 main_sha=$(git rev-parse main)
-tree_sha=$(git rev-parse main^{tree})
+tree_sha=$(git rev-parse "main^{tree}")
 new_commit=$(echo "Concurrent change" | git commit-tree "$tree_sha" -p "$main_sha")
 git update-ref refs/heads/main "$new_commit"
 

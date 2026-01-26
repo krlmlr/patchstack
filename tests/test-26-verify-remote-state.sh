@@ -74,14 +74,12 @@ fi
 echo "✓ Remote patch-empty was deleted"
 
 # Verify topology in remote
-main_sha=$(git rev-parse main)
-alpha_sha=$(git rev-parse patch-alpha)
-beta_sha=$(git rev-parse patch-beta)
-
 # Patches should be based on upstream, not on integrated main
 # So we can't check for simple ancestry. Instead, check that:
 # 1. Main includes the integrated patches (has their changes)
 # 2. Patches exist and are valid refs
+alpha_sha=$(git rev-parse patch-alpha)
+beta_sha=$(git rev-parse patch-beta)
 
 # Just verify the branches are valid and point to commits
 if ! git cat-file -e "$alpha_sha" 2>/dev/null; then
