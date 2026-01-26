@@ -196,10 +196,18 @@ test_feature_name() {
 
 ### Before Committing
 
-1. All tests pass
+1. Run `make check` to verify all linting and tests pass
 2. Code follows style guidelines
 3. Comments explain "why" not "what"
 4. Error messages are clear and actionable
+
+### Before Requesting Review
+
+**ALWAYS run `make check` before requesting a code review.** This runs:
+- `make lint` - shellcheck on all bash scripts
+- `make test` - full test suite
+
+This ensures code quality and prevents CI failures.
 
 ## Testing Philosophy
 

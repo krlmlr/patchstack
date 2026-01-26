@@ -28,7 +28,7 @@ advance_upstream 1
 git fetch -q upstream
 
 # Run sync
-output=$("$PATCHSTACK" sync 2>&1)
+"$PATCHSTACK" sync >/dev/null 2>&1
 
 # Verify temporary ref exists
 assert_patchstack_ref_exists "patch-test"

@@ -27,6 +27,7 @@ Please refer to [AGENTS.md](../AGENTS.md).
 - `tests/harness.sh` - Test infrastructure
 - `tests/test-*.sh` - Individual test files
 - `tests/snapshots/` - Expected output snapshots
+- `Makefile` - Build/test automation
 
 ### Code Style Quick Tips
 - Always use `set -euo pipefail` in bash scripts
@@ -36,16 +37,25 @@ Please refer to [AGENTS.md](../AGENTS.md).
 - Keep functions small (<50 lines)
 
 ### Testing
-- Every feature requires tests before implementation
-- Tests use local throwaway Git repositories
-- Use snapshot testing via `assert_snapshot` helper
-- Run tests with `./tests/run-all-tests.sh`
+
+**CRITICAL: ALWAYS run `make check` before requesting a code review.**
+
+```bash
+# Run all checks (lint + tests)
+make check
+
+# Run only linting (shellcheck)
+make lint
+
+# Run only tests
+make test
+```
 
 ### When Contributing
 1. Read [AGENTS.md](../AGENTS.md) for complete guidelines
 2. Write tests first
 3. Implement the minimal solution
-4. Verify tests pass
-5. Check code follows style guidelines
+4. Run `make check` to verify all checks pass
+5. Request code review only after `make check` succeeds
 
 For comprehensive information, always refer to [AGENTS.md](../AGENTS.md).

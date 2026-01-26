@@ -1282,8 +1282,8 @@ cmd_sync() {
     local success=0
     local failed_count=0
     local empty=0
-    local failed_patches=()
-    local empty_patches=()
+    local failed_patch_list=()
+    local empty_patch_list=()
 
     # Build a set of integration failures
     declare -A integration_failures
@@ -1304,16 +1304,16 @@ cmd_sync() {
         # Check if this patch failed integration
         if [[ -n "${integration_failures[$patch]:-}" ]]; then
             ((failed_count++)) || true
-            failed_patches+=("$patch (${integration_failures[$patch]})")
+            failed_patch_list+=("$patch (${integration_failures[$patch]})")
         elif [[ "$status" == "success" ]]; then
             ((success++)) || true
         elif [[ "$status" == "empty" ]]; then
             ((empty++)) || true
-            empty_patches+=("$patch")
+            empty_patch_list+=("$patch")
         else
             # Replay failure (conflict, invalid, etc)
             ((failed_count++)) || true
-            failed_patches+=("$patch ($status)")
+            failed_patch_list+=("$patch ($status)")
         fi
     done
 
@@ -1324,14 +1324,14 @@ cmd_sync() {
     
     if [[ $empty -gt 0 ]]; then
         echo "○ Removed: $empty empty patches"
-        for patch in "${empty_patches[@]}"; do
+        for patch in "${empty_patch_list[@]}"; do
             echo "  - $patch (already merged upstream)"
         done
     fi
     
     if [[ $failed_count -gt 0 ]]; then
         echo "✗ Failed: $failed_count patches"
-        for patch_info in "${failed_patches[@]}"; do
+        for patch_info in "${failed_patch_list[@]}"; do
             echo "  - $patch_info"
         done
         echo

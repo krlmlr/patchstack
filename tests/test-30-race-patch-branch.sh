@@ -37,7 +37,7 @@ before_alpha=$(git rev-parse patch-alpha)
 before_beta=$(git rev-parse patch-beta)
 
 # Create a concurrent commit on patch-alpha (simulating another user's force-push)
-tree_sha=$(git rev-parse patch-alpha^{tree})
+tree_sha=$(git rev-parse "patch-alpha^{tree}")
 concurrent_commit=$(echo "Concurrent push to patch-alpha" | git commit-tree "$tree_sha" -p "$before_alpha")
 git update-ref refs/heads/patch-alpha "$concurrent_commit"
 
