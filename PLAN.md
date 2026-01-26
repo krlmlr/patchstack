@@ -184,6 +184,28 @@
 
 **Detailed Plan:** See [plan/180-error-recovery.md](plan/180-error-recovery.md)
 
+### Phase 1.9: Check Alien Commits
+
+**Build:**
+
+- [ ] Add `Patchstack-Patch:` trailer to squash commit messages (following Quilt/StGit conventions)
+- [ ] Implement alien commit detection (`find_alien_commits()`)
+- [ ] Add `--delete` flag to allow sync with alien commit removal
+- [ ] Add `history` subcommand to show commit provenance on origin/main
+- [ ] Abort sync by default if alien commits detected (require explicit `--delete`)
+- [ ] Support `--dry-run --delete` to preview what would be removed
+
+**Test:**
+
+- [ ] Test: sync aborts when alien commits exist (without --delete)
+- [ ] Test: sync proceeds with --delete and removes aliens
+- [ ] Test: --dry-run --delete shows what would be removed without changes
+- [ ] Test: history command shows commit provenance
+- [ ] Test: squash commits include Patchstack-Patch trailer
+- [ ] Test: commits with trailers are recognized as identifiable
+
+**Detailed Plan:** See [plan/190-check-alien-commits.md](plan/190-check-alien-commits.md)
+
 ## Milestone 2: GitHub Action for Reusable Workflows
 
 ### Phase 2.1: Minimal Action Wrapper
@@ -241,6 +263,31 @@
 - [ ] Add metrics/telemetry
 - [ ] Support for multiple upstreams
 
+## Milestone 3: Recovery and Migration Tools
+
+### Phase 3.1: Backport Command
+
+**Build:**
+
+- [ ] Implement `patchstack backport` command
+- [ ] Create patch branches from alien commits (one branch per commit by default)
+- [ ] Add `--single` flag to create one branch with all aliens
+- [ ] Add `--prefix=NAME` flag for custom branch naming
+- [ ] Add `--dry-run` flag to preview branch creation
+- [ ] Add `--interactive` flag for selective backporting
+- [ ] Handle cherry-pick conflicts with best-effort strategies
+
+**Test:**
+
+- [ ] Test: backport creates branches for alien commits
+- [ ] Test: backport --dry-run shows plan without creating branches
+- [ ] Test: backport --single creates one multi-commit branch
+- [ ] Test: after backport, sync works without alien warnings
+- [ ] Test: backport with no aliens reports nothing to do
+- [ ] Test: backport handles cherry-pick conflicts gracefully
+
+**Detailed Plan:** See [plan/310-backport-command.md](plan/310-backport-command.md)
+
 ## Success Criteria
 
 ### Milestone 1 Complete
@@ -260,3 +307,12 @@
 - ✅ Action provides clear feedback on conflicts
 - ✅ Workflow template is copy-paste ready
 - ✅ At least one real-world fork using the action successfully
+
+### Milestone 3 Complete
+
+- ✅ Alien commits on origin/main are detected before sync
+- ✅ Sync aborts safely when untracked commits exist (unless `--delete` used)
+- ✅ `patchstack history` shows commit provenance for all commits on main
+- ✅ `patchstack backport` converts aliens to proper patch branches
+- ✅ Users can migrate existing forks to patchstack without losing commits
+- ✅ Squash commits include machine-readable patch references
