@@ -1,0 +1,6 @@
+patch-alpha (SHORT_SHA, 1 commit)
+patch-beta (SHORT_SHA, 3 commits)
+
+Found 2 patch branches
+[VERBOSE] Cleaning up temporary resources for run 
+[VERBOSE] Releasing lock

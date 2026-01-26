@@ -1,0 +1,29 @@
+🔍 DRY RUN MODE: No changes will be made
+
+🚀 Starting patchstack sync (run: RUN_ID)...
+
+🔍 Phase 1: Discovering patch branches
+Found 1 patch branches
+
+🔄 Phase 2: Replaying patches onto upstream
+Replaying patch-alpha... ✓ success
+Viable patches: 1
+
+📦 Phase 3: Integrating patches into new main
+Integrating 1 viable patches...
+Integrating patch-alpha... ✓ integrated
+
+Integration summary:
+  Integrated: 1 patches
+  Failed: 0 patches
+
+===================================
+📊 DRY RUN Summary (No Changes Made)
+===================================
+
+Would update local refs:
+
+Would push to origin
+
+To apply these changes, run:
+  patchstack sync

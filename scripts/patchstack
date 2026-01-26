@@ -9,6 +9,10 @@ PATCH_REMOTE="${PATCH_REMOTE:-origin}"
 UPSTREAM_REMOTE="${UPSTREAM_REMOTE:-upstream}"
 MAIN_BRANCH="${MAIN_BRANCH:-main}"
 
+# Flags
+DRY_RUN=false
+VERBOSE=false
+
 # Branch name to track the last synced upstream/main
 # This is used to discover patch branches (descendants of this base)
 # Stored as a branch in origin (refs/heads/patchstack/upstream-base)
@@ -25,12 +29,29 @@ RUN_TEMP_DIR=""
 LOCK_DIR=""
 LOCK_ACQUIRED=false
 
+# Logging functions
+log_verbose() {
+    if [ "$VERBOSE" = true ]; then
+        echo "[VERBOSE] $*" >&2
+    fi
+}
+
+log_info() {
+    echo "$*"
+}
+
+log_error() {
+    echo "ERROR: $*" >&2
+}
+
+log_warning() {
+    echo "WARNING: $*" >&2
+}
+
 # Verbosity helper - discards output for now, can be changed later
 # Usage: verbose_echo "debug message"
 verbose_echo() {
-    # Currently discards all verbose output
-    # TODO: Add verbosity levels (e.g., PATCHSTACK_VERBOSE=1)
-    :
+    log_verbose "$@"
 }
 
 # Acquire exclusive lock to prevent concurrent runs
@@ -989,11 +1010,139 @@ cmd_list() {
         return 0
     fi
 
-    echo "$patches"
+    local origin_main="refs/remotes/$PATCH_REMOTE/$MAIN_BRANCH"
+    
+    # Display patches with optional verbose information
+    while IFS= read -r patch; do
+        if [ "$VERBOSE" = true ]; then
+            local patch_ref="refs/remotes/$PATCH_REMOTE/$patch"
+            local patch_sha
+            patch_sha=$(git rev-parse --short "$patch_ref")
+            local commit_count
+            commit_count=$(git rev-list --count "$origin_main..$patch_ref")
+            
+            if [ "$commit_count" -eq 1 ]; then
+                echo "$patch ($patch_sha, $commit_count commit)"
+            else
+                echo "$patch ($patch_sha, $commit_count commits)"
+            fi
+        else
+            echo "$patch"
+        fi
+    done <<< "$patches"
+    
     echo
     local count
     count=$(echo "$patches" | wc -l | tr -d ' ')
     echo "Found $count patch branches"
+}
+
+# Status command: show current patch stack state
+cmd_status() {
+    echo "Patchstack Status"
+    echo "================="
+    echo
+
+    # Check remotes exist
+    if ! git remote get-url "$UPSTREAM_REMOTE" &>/dev/null; then
+        log_error "Remote '$UPSTREAM_REMOTE' not configured"
+        echo "Expected upstream remote not found"
+        return 1
+    fi
+
+    if ! git remote get-url "$PATCH_REMOTE" &>/dev/null; then
+        log_error "Remote '$PATCH_REMOTE' not configured"
+        return 1
+    fi
+
+    # Show remote configuration
+    echo "Configuration:"
+    echo "  Fork:     $PATCH_REMOTE ($(git remote get-url "$PATCH_REMOTE"))"
+    echo "  Upstream: $UPSTREAM_REMOTE ($(git remote get-url "$UPSTREAM_REMOTE"))"
+    echo "  Branch:   $MAIN_BRANCH"
+    echo
+
+    # Check refs exist
+    local upstream_ref="refs/remotes/$UPSTREAM_REMOTE/$MAIN_BRANCH"
+    local origin_ref="refs/remotes/$PATCH_REMOTE/$MAIN_BRANCH"
+
+    if ! git rev-parse "$upstream_ref" &>/dev/null; then
+        log_error "$upstream_ref not found"
+        echo "Run 'git fetch $UPSTREAM_REMOTE' first"
+        return 1
+    fi
+
+    if ! git rev-parse "$origin_ref" &>/dev/null; then
+        log_error "$origin_ref not found"
+        echo "Run 'git fetch $PATCH_REMOTE' first"
+        return 1
+    fi
+
+    # Show main branch status
+    echo "Main Branch:"
+    local upstream_sha
+    upstream_sha=$(git rev-parse --short "$upstream_ref")
+    local origin_sha
+    origin_sha=$(git rev-parse --short "$origin_ref")
+
+    echo "  Upstream: $upstream_sha"
+    echo "  Fork:     $origin_sha"
+
+    # Check if origin/main is behind upstream
+    if git merge-base --is-ancestor "$upstream_ref" "$origin_ref"; then
+        if [ "$(git rev-parse "$upstream_ref")" = "$(git rev-parse "$origin_ref")" ]; then
+            echo "  Status:   ✓ Up to date"
+        else
+            local ahead
+            ahead=$(git rev-list --count "$upstream_ref..$origin_ref")
+            echo "  Status:   ✓ Ahead by $ahead commits"
+        fi
+    else
+        local behind
+        behind=$(git rev-list --count "$origin_ref..$upstream_ref")
+        echo "  Status:   ⚠ Behind by $behind commits (sync needed)"
+    fi
+    echo
+
+    # Show patch branches
+    local patches
+    patches=$(discover_patch_branches)
+
+    if [[ -z "$patches" ]]; then
+        echo "Patch Branches: None"
+        return 0
+    fi
+
+    echo "Patch Branches:"
+    while IFS= read -r patch; do
+        local patch_ref="refs/remotes/$PATCH_REMOTE/$patch"
+        local patch_sha
+        patch_sha=$(git rev-parse --short "$patch_ref")
+        local commit_count
+        commit_count=$(git rev-list --count "$origin_ref..$patch_ref")
+
+        # Check if based on origin/main
+        local status
+        if git merge-base --is-ancestor "$origin_ref" "$patch_ref"; then
+            status="✓"
+        else
+            status="⚠"
+        fi
+
+        echo "  $status $patch ($patch_sha)"
+        if [ "$commit_count" -eq 1 ]; then
+            echo "      $commit_count commit ahead of main"
+        else
+            echo "      $commit_count commits ahead of main"
+        fi
+
+        # Check relationship to upstream
+        if ! git merge-base --is-ancestor "$upstream_ref" "$patch_ref"; then
+            local behind
+            behind=$(git rev-list --count "$patch_ref..$upstream_ref")
+            echo "      ⚠ Needs rebase ($behind commits behind upstream)"
+        fi
+    done <<< "$patches"
 }
 
 # Check if the working copy is clean (no uncommitted changes)
@@ -1142,6 +1291,11 @@ cmd_sync() {
     # Create run-specific temporary directory
     RUN_TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/patchstack-${RUN_ID}.XXXXXX")"
     
+    if [ "$DRY_RUN" = true ]; then
+        echo "🔍 DRY RUN MODE: No changes will be made"
+        echo
+    fi
+    
     echo "🚀 Starting patchstack sync (run: $RUN_ID)..."
     echo
 
@@ -1188,6 +1342,50 @@ cmd_sync() {
     # Capture ref state BEFORE Phase 4 updates them (for force-with-lease)
     local ref_state_file="$RUN_TEMP_DIR/ref-state"
     capture_ref_state "${integration_results[@]}" > "$ref_state_file"
+
+    # If dry-run, show what would be done and exit
+    if [ "$DRY_RUN" = true ]; then
+        echo "==================================="
+        echo "📊 DRY RUN Summary (No Changes Made)"
+        echo "==================================="
+        echo
+
+        # Show what would be updated
+        echo "Would update local refs:"
+        
+        # Show updates for viable patches
+        if [[ $viable -gt 0 ]]; then
+            for result in "${integration_results[@]}"; do
+                if [[ "$result" == update:* ]]; then
+                    local rest=${result#update:}
+                    local branch=${rest%%:*}
+                    echo "  ✓ $branch"
+                elif [[ "$result" == delete:* ]]; then
+                    local rest=${result#delete:}
+                    local branch=${rest%%:*}
+                    echo "  ✗ $branch (would be deleted)"
+                fi
+            done
+        fi
+        
+        # Show what would be deleted (empty patches)
+        for result in "${replay_results[@]}"; do
+            if [[ "$result" == *:empty ]]; then
+                local branch=${result%%:*}
+                local ref="refs/remotes/$PATCH_REMOTE/$branch"
+                if git rev-parse "$ref" &>/dev/null; then
+                    echo "  ✗ $branch (would be deleted - empty)"
+                fi
+            fi
+        done
+        
+        echo
+        echo "Would push to $PATCH_REMOTE"
+        echo
+        echo "To apply these changes, run:"
+        echo "  patchstack sync"
+        return 0
+    fi
 
     # Phase 4: Update refs (always run to handle empty patches)
     echo "🔄 Phase 4: Updating local refs"
@@ -1346,11 +1544,17 @@ cmd_sync() {
 # Usage information
 usage() {
     cat <<EOF
-Usage: patchstack <command>
+Usage: patchstack [flags] <command>
 
 Commands:
-    list    List all patch branches
-    sync    Synchronize patch stack with upstream
+    list      List all patch branches
+    sync      Synchronize patch stack with upstream
+    status    Show current patch stack state
+
+Flags:
+    --dry-run     Show what would be done without doing it
+    --verbose     Show detailed output
+    -v            Alias for --verbose
 
 Description:
     Patchstack maintains long-living forks as deterministic patch stacks
@@ -1360,11 +1564,36 @@ Configuration:
     PATCH_REMOTE    Remote for patch branches (default: origin)
     UPSTREAM_REMOTE Remote for upstream (default: upstream)
     MAIN_BRANCH     Main branch name (default: main)
+
+Examples:
+    patchstack sync
+    patchstack sync --dry-run
+    patchstack status
+    patchstack list --verbose
 EOF
 }
 
 # Main entry point
 main() {
+    # Parse flags first - consume them from the argument list
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --dry-run)
+                DRY_RUN=true
+                shift
+                ;;
+            --verbose|-v)
+                VERBOSE=true
+                shift
+                ;;
+            *)
+                # Not a flag, break to process command
+                break
+                ;;
+        esac
+    done
+    
+    # Get command
     local command="${1:-}"
 
     case "$command" in
@@ -1373,6 +1602,9 @@ main() {
             ;;
         sync)
             cmd_sync
+            ;;
+        status)
+            cmd_status
             ;;
         "")
             usage

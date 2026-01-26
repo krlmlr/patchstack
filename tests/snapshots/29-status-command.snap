@@ -1,0 +1,18 @@
+Patchstack Status
+=================
+
+Configuration:
+  Fork:     origin (/tmp/TEMP_DIR/fork)
+  Upstream: upstream (/tmp/TEMP_DIR/upstream)
+  Branch:   main
+
+Main Branch:
+  Upstream: SHORT_SHA
+  Fork:     SHORT_SHA
+  Status:   ✓ Up to date
+
+Patch Branches:
+  ✓ patch-alpha (SHORT_SHA)
+      2 commits ahead of main
+  ✓ patch-beta (SHORT_SHA)
+      1 commit ahead of main

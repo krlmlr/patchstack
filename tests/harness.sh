@@ -327,7 +327,9 @@ assert_snapshot() {
 # Scrub nondeterministic output from test results
 scrub_output() {
     sed -e 's|/tmp/[^/]*|/tmp/TEMP_DIR|g' \
+        -e 's|run: [0-9]\{8\}-[0-9]\{6\}-[0-9]*-[0-9]*|run: RUN_ID|g' \
         -e 's|[0-9a-f]\{40\}|COMMIT_SHA|g' \
+        -e 's|[0-9a-f]\{7\}|SHORT_SHA|g' \
         -e 's|[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}|DATE|g' \
         -e 's|[0-9]\{2\}:[0-9]\{2\}:[0-9]\{2\}|TIME|g'
 }
