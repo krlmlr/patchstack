@@ -45,12 +45,14 @@ The design assumes GitHub-hosted repos, but is general Git.
 - **UPSTREAM_REMOTE**: remote pointing to upstream repo, e.g. `upstream`
 - **MAIN_BRANCH**: main integration branch, default `main`
 - **UPSTREAM_BRANCH**: upstream mainline, default `main`
+- **patchstack/upstream-base**: branch in PATCH_REMOTE that tracks the last synced upstream/main;
+  used to discover patch branches and determine which commits need rebasing
 
 Patch branches:
 
 - all `refs/remotes/$PATCH_REMOTE/*`
-- excluding `$PATCH_REMOTE/$MAIN_BRANCH`
-- **descendant of fork main at run start**
+- excluding `$PATCH_REMOTE/$MAIN_BRANCH` and `$PATCH_REMOTE/patchstack/*`
+- **descendant of `patchstack/upstream-base`** (not fork main, since fork main contains squash commits)
 - sorted **lexicographically**
 
 ---
@@ -140,25 +142,32 @@ upstream/main:
 U0 --- U1 --- U2
 ```
 
-Fork:
+Fork (after first sync established the baseline):
 
 ```
 origin/main:
 U0 --- U1 --- U2 --- SA --- SB --- SC
+
+patchstack/upstream-base:
+U0 --- U1 --- U2  (points to same commit as upstream/main at last sync)
 ```
 
-Patch branches (descendants of fork main):
+Patch branches (descendants of patchstack/upstream-base):
 
 ```
 origin/patch-A:
-U0 --- U1 --- U2 --- SA --- SB --- SC --- A1 --- A2
+U0 --- U1 --- U2 --- A1 --- A2
 
 origin/patch-B:
-U0 --- U1 --- U2 --- SA --- SB --- SC --- B1
+U0 --- U1 --- U2 --- B1
 
 origin/patch-C:
-U0 --- U1 --- U2 --- SA --- SB --- SC --- C1 --- C2
+U0 --- U1 --- U2 --- C1 --- C2
 ```
+
+**Note:** Patch branches are based directly on `upstream/main` (tracked via `patchstack/upstream-base`),
+NOT on the integrated `origin/main`. This is because patch commits cannot be descendants of squash
+commits (SA, SB, SC) by definition - the squash commits are derived from the patch commits.
 
 ---
 
@@ -167,8 +176,8 @@ U0 --- U1 --- U2 --- SA --- SB --- SC --- C1 --- C2
 ### Phase 1: Compute (no remote writes)
 
 - fetch remotes
-- discover eligible patch branches
-- rebase patches locally onto `upstream/main`
+- discover eligible patch branches (descendants of `patchstack/upstream-base`)
+- rebase patches locally onto new `upstream/main`
 - attempt local squash integration in lexicographic order
 - decide final outcomes per branch
 
@@ -177,6 +186,7 @@ U0 --- U1 --- U2 --- SA --- SB --- SC --- C1 --- C2
 - update `main`
 - update only **integratable** rebased patch branches
 - delete empty branches
+- update `patchstack/upstream-base` to new `upstream/main`
 - push notes
 
 This preserves invariant **I2**.
@@ -205,6 +215,9 @@ U0 --- U1 --- U2 --- U3 --- C1' --- C2'
 
 origin/main:
 U0 --- U1 --- U2 --- U3 --- SA' --- SB' --- SC'
+
+patchstack/upstream-base:
+U0 --- U1 --- U2 --- U3  (updated to new upstream/main)
 ```
 
 ---

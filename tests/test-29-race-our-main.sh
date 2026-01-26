@@ -35,7 +35,7 @@ before_main=$(git rev-parse main)
 before_alpha=$(git rev-parse patch-alpha)
 
 # Create a concurrent commit on main (simulating another user's push)
-tree_sha=$(git rev-parse main^{tree})
+tree_sha=$(git rev-parse "main^{tree}")
 concurrent_commit=$(echo "Concurrent push to main" | git commit-tree "$tree_sha" -p "$before_main")
 git update-ref refs/heads/main "$concurrent_commit"
 
