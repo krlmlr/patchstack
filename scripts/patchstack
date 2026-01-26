@@ -1014,14 +1014,20 @@ cmd_list() {
     
     # Display patches with optional verbose information
     while IFS= read -r patch; do
-        if [ "$VERBOSE" = true ]; then
+        if [[ "$VERBOSE" = true ]]; then
             local patch_ref="refs/remotes/$PATCH_REMOTE/$patch"
             local patch_sha
-            patch_sha=$(git rev-parse --short "$patch_ref")
+            if ! patch_sha=$(git rev-parse --short "$patch_ref" 2>&1); then
+                echo "Error: failed to resolve patch ref '$patch_ref'" >&2
+                return 1
+            fi
             local commit_count
-            commit_count=$(git rev-list --count "$origin_main..$patch_ref")
+            if ! commit_count=$(git rev-list --count "$origin_main..$patch_ref" 2>&1); then
+                echo "Error: failed to count commits between '$origin_main' and '$patch_ref'" >&2
+                return 1
+            fi
             
-            if [ "$commit_count" -eq 1 ]; then
+            if [[ "$commit_count" -eq 1 ]]; then
                 echo "$patch ($patch_sha, $commit_count commit)"
             else
                 echo "$patch ($patch_sha, $commit_count commits)"
@@ -1046,7 +1052,7 @@ cmd_status() {
     # Check remotes exist
     if ! git remote get-url "$UPSTREAM_REMOTE" &>/dev/null; then
         log_error "Remote '$UPSTREAM_REMOTE' not configured"
-        echo "Expected upstream remote not found"
+        echo "Expected upstream remote not found" >&2
         return 1
     fi
 
@@ -1068,13 +1074,13 @@ cmd_status() {
 
     if ! git rev-parse "$upstream_ref" &>/dev/null; then
         log_error "$upstream_ref not found"
-        echo "Run 'git fetch $UPSTREAM_REMOTE' first"
+        echo "Run 'git fetch $UPSTREAM_REMOTE' first" >&2
         return 1
     fi
 
     if ! git rev-parse "$origin_ref" &>/dev/null; then
         log_error "$origin_ref not found"
-        echo "Run 'git fetch $PATCH_REMOTE' first"
+        echo "Run 'git fetch $PATCH_REMOTE' first" >&2
         return 1
     fi
 
@@ -1090,7 +1096,7 @@ cmd_status() {
 
     # Check if origin/main is behind upstream
     if git merge-base --is-ancestor "$upstream_ref" "$origin_ref"; then
-        if [ "$(git rev-parse "$upstream_ref")" = "$(git rev-parse "$origin_ref")" ]; then
+        if [[ "$(git rev-parse "$upstream_ref")" = "$(git rev-parse "$origin_ref")" ]]; then
             echo "  Status:   ✓ Up to date"
         else
             local ahead
@@ -1117,9 +1123,15 @@ cmd_status() {
     while IFS= read -r patch; do
         local patch_ref="refs/remotes/$PATCH_REMOTE/$patch"
         local patch_sha
-        patch_sha=$(git rev-parse --short "$patch_ref")
+        if ! patch_sha=$(git rev-parse --short "$patch_ref" 2>&1); then
+            echo "Error: failed to resolve patch ref '$patch_ref'" >&2
+            return 1
+        fi
         local commit_count
-        commit_count=$(git rev-list --count "$origin_ref..$patch_ref")
+        if ! commit_count=$(git rev-list --count "$origin_ref..$patch_ref" 2>&1); then
+            echo "Error: failed to count commits between '$origin_ref' and '$patch_ref'" >&2
+            return 1
+        fi
 
         # Check if based on origin/main
         local status
@@ -1130,7 +1142,7 @@ cmd_status() {
         fi
 
         echo "  $status $patch ($patch_sha)"
-        if [ "$commit_count" -eq 1 ]; then
+        if [[ "$commit_count" -eq 1 ]]; then
             echo "      $commit_count commit ahead of main"
         else
             echo "      $commit_count commits ahead of main"
@@ -1291,7 +1303,7 @@ cmd_sync() {
     # Create run-specific temporary directory
     RUN_TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/patchstack-${RUN_ID}.XXXXXX")"
     
-    if [ "$DRY_RUN" = true ]; then
+    if [[ "$DRY_RUN" = true ]]; then
         echo "🔍 DRY RUN MODE: No changes will be made"
         echo
     fi
@@ -1344,7 +1356,7 @@ cmd_sync() {
     capture_ref_state "${integration_results[@]}" > "$ref_state_file"
 
     # If dry-run, show what would be done and exit
-    if [ "$DRY_RUN" = true ]; then
+    if [[ "$DRY_RUN" = true ]]; then
         echo "==================================="
         echo "📊 DRY RUN Summary (No Changes Made)"
         echo "==================================="
@@ -1352,6 +1364,11 @@ cmd_sync() {
 
         # Show what would be updated
         echo "Would update local refs:"
+        
+        # Show main branch update
+        if [[ $viable -gt 0 ]]; then
+            echo "  ✓ main (integrated main)"
+        fi
         
         # Show updates for viable patches
         if [[ $viable -gt 0 ]]; then
@@ -1567,9 +1584,9 @@ Configuration:
 
 Examples:
     patchstack sync
-    patchstack sync --dry-run
+    patchstack --dry-run sync
     patchstack status
-    patchstack list --verbose
+    patchstack --verbose list
 EOF
 }
 
@@ -1585,6 +1602,13 @@ main() {
             --verbose|-v)
                 VERBOSE=true
                 shift
+                ;;
+            --*)
+                # Unknown flag
+                echo "Error: Unknown flag '$1'" >&2
+                echo >&2
+                usage
+                exit 1
                 ;;
             *)
                 # Not a flag, break to process command
