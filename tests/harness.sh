@@ -161,16 +161,16 @@ assert_branch_exists() {
 # Returns the full ref path (refs/patchstack/runs/RUN_ID/BRANCH)
 find_patchstack_ref() {
     local branch_name=$1
-    
+
     # Find refs matching refs/patchstack/runs/*/BRANCH_NAME
     local refs
     refs=$(git for-each-ref --format='%(refname)' "refs/patchstack/runs/*/$branch_name" 2>/dev/null)
-    
+
     if [[ -z "$refs" ]]; then
         echo -e "${RED}✗ No patchstack ref found for branch: $branch_name${NC}" >&2
         return 1
     fi
-    
+
     # Check if multiple refs exist (indicates cleanup issue)
     local ref_count
     ref_count=$(echo "$refs" | wc -l)
@@ -178,7 +178,7 @@ find_patchstack_ref() {
         echo -e "${RED}✗ Warning: Multiple patchstack refs found for branch $branch_name (found $ref_count)${NC}" >&2
         echo -e "${RED}   This may indicate stale refs from interrupted runs${NC}" >&2
     fi
-    
+
     # Return the first one
     echo "$refs" | head -1
 }
@@ -189,19 +189,19 @@ find_patchstack_main_ref() {
     # Find refs matching refs/patchstack/runs/*/main
     local ref
     ref=$(git for-each-ref --format='%(refname)' "refs/patchstack/runs/*/main" 2>/dev/null | head -1)
-    
+
     if [[ -z "$ref" ]]; then
         echo -e "${RED}✗ No patchstack integrated main ref found${NC}" >&2
         return 1
     fi
-    
+
     echo "$ref"
 }
 
 # Assertion: Check if patchstack temporary ref exists for a branch
 assert_patchstack_ref_exists() {
     local branch_name=$1
-    
+
     if ! find_patchstack_ref "$branch_name" >/dev/null 2>&1; then
         echo -e "${RED}✗ Assertion failed${NC}"
         echo "  Patchstack temporary ref does not exist for branch: $branch_name"
@@ -212,7 +212,7 @@ assert_patchstack_ref_exists() {
 # Assertion: Check if patchstack temporary ref does NOT exist for a branch
 assert_patchstack_ref_not_exists() {
     local branch_name=$1
-    
+
     if find_patchstack_ref "$branch_name" >/dev/null 2>&1; then
         echo -e "${RED}✗ Assertion failed${NC}"
         echo "  Patchstack temporary ref exists but should not for branch: $branch_name"
@@ -326,12 +326,13 @@ assert_snapshot() {
 
 # Scrub nondeterministic output from test results
 scrub_output() {
-    sed -e 's|/tmp/[^/]*|/tmp/TEMP_DIR|g' \
-        -e 's|run: [0-9]\{8\}-[0-9]\{6\}-[0-9]*-[0-9]*|run: RUN_ID|g' \
-        -e 's|[0-9a-f]\{40\}|COMMIT_SHA|g' \
-        -e 's|[0-9a-f]\{7\}|SHORT_SHA|g' \
-        -e 's|[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}|DATE|g' \
-        -e 's|[0-9]\{2\}:[0-9]\{2\}:[0-9]\{2\}|TIME|g'
+    sed -E \
+        -e 's#(tmp|/?var/folders/.*/T)/[^/]*#/tmp/TEMP_DIR#g' \
+        -e 's|run: [0-9]{8}-[0-9]{6}-[0-9]+-[0-9]+|run: RUN_ID|g' \
+        -e 's|[0-9a-f]{40}|COMMIT_SHA|g' \
+        -e 's|[0-9a-f]{7}|SHORT_SHA|g' \
+        -e 's|[0-9]{4}-[0-9]{2}-[0-9]{2}|DATE|g' \
+        -e 's|[0-9]{2}:[0-9]{2}:[0-9]{2}|TIME|g'
 }
 
 # Run a test and capture its output for snapshot testing
