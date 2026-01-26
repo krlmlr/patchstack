@@ -148,19 +148,21 @@
 
 **Build:**
 
-- [ ] Add `--dry-run` flag (perform all checks, no ref updates)
-- [ ] Add `status` subcommand (show patch stack state)
-- [ ] Add `--verbose` flag for detailed logging
-- [ ] Enhance `list` command with verbose mode
+- [x] Add `--dry-run` flag (perform all checks, no ref updates)
+- [x] Add `status` subcommand (show patch stack state)
+- [x] Add `--verbose` flag for detailed logging
+- [x] Enhance `list` command with verbose mode
 
 **Test:**
 
-- [ ] Test: dry-run shows planned changes without making them
-- [ ] Test: status shows current patch branches and integration state
-- [ ] Test: status detects when sync is needed
-- [ ] Test: verbose list shows commit counts and SHAs
+- [x] Test: dry-run shows planned changes without making them
+- [x] Test: status shows current patch branches and integration state
+- [x] Test: status detects when sync is needed
+- [x] Test: verbose list shows commit counts and SHAs
 
 **Detailed Plan:** See [plan/170-dry-run-and-status.md](plan/170-dry-run-and-status.md)
+
+**Status:** ✓ Complete
 
 ### Phase 1.8: Error Recovery
 
