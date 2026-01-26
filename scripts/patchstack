@@ -996,10 +996,136 @@ cmd_list() {
     echo "Found $count patch branches"
 }
 
+# Check if the working copy is clean (no uncommitted changes)
+check_working_copy_clean() {
+    if ! git diff-index --quiet HEAD -- 2>/dev/null; then
+        echo "ERROR: Working copy has uncommitted changes" >&2
+        echo "Please commit or stash your changes before running patchstack sync" >&2
+        return 1
+    fi
+    
+    # Also check for untracked files that might conflict
+    # (This is a softer check - we warn but don't fail)
+    if [[ -n "$(git ls-files --others --exclude-standard 2>/dev/null)" ]]; then
+        verbose_echo "Warning: Working copy has untracked files"
+    fi
+    
+    return 0
+}
+
+# Update local branches to match their remote tracking branches after push
+# This ensures local branches stay in sync with origin after patchstack sync
+# Patchstack rebases patch branches, so we need to update locals to match rebased remotes
+# Takes replay results as arguments to know which branches patchstack managed
+update_local_branches() {
+    local replay_results=("$@")
+    
+    echo "🔄 Updating local branches..."
+    
+    local current_branch
+    current_branch=$(git symbolic-ref --short HEAD 2>/dev/null || echo "")
+    local current_sha
+    current_sha=$(git rev-parse HEAD 2>/dev/null)
+    
+    local updated_count=0
+    
+    # Build set of patch branches that patchstack manages
+    declare -A managed_patches
+    declare -A empty_patches
+    for result in "${replay_results[@]}"; do
+        local patch=${result%%:*}
+        local status=${result#*:}
+        managed_patches["$patch"]=1
+        if [[ "$status" == "empty" ]]; then
+            empty_patches["$patch"]=1
+        fi
+    done
+    
+    # Update main branch - patchstack rewrites it with squash commits
+    # so we always update it to match the remote
+    local main_ref="refs/heads/$MAIN_BRANCH"
+    local remote_main_ref="refs/remotes/$PATCH_REMOTE/$MAIN_BRANCH"
+    
+    if git rev-parse "$main_ref" &>/dev/null && git rev-parse "$remote_main_ref" &>/dev/null; then
+        local local_sha remote_sha
+        local_sha=$(git rev-parse "$main_ref")
+        remote_sha=$(git rev-parse "$remote_main_ref")
+        
+        if [[ "$local_sha" != "$remote_sha" ]]; then
+            # Patchstack rewrites main with squash commits - update to match remote
+            git update-ref "$main_ref" "$remote_sha" "$local_sha"
+            echo "  Updated $MAIN_BRANCH to $(git rev-parse --short "$remote_sha")"
+            ((updated_count++)) || true
+        fi
+    fi
+    
+    # Update patch branches that patchstack manages
+    for branch in "${!managed_patches[@]}"; do
+        # Skip main branch (already handled)
+        [[ "$branch" == "$MAIN_BRANCH" ]] && continue
+        
+        # Skip patchstack internal branches
+        [[ "$branch" == patchstack/* ]] && continue
+        
+        local local_ref="refs/heads/$branch"
+        local remote_ref="refs/remotes/$PATCH_REMOTE/$branch"
+        
+        # Check if local branch exists
+        if ! git rev-parse "$local_ref" &>/dev/null 2>&1; then
+            continue
+        fi
+        
+        # Check if remote exists
+        if git rev-parse "$remote_ref" &>/dev/null 2>&1; then
+            local local_sha remote_sha
+            local_sha=$(git rev-parse "$local_ref")
+            remote_sha=$(git rev-parse "$remote_ref")
+            
+            if [[ "$local_sha" != "$remote_sha" ]]; then
+                # Patchstack rebased the remote - update local to match
+                git update-ref "$local_ref" "$remote_sha" "$local_sha"
+                echo "  Updated $branch to $(git rev-parse --short "$remote_sha")"
+                ((updated_count++)) || true
+            fi
+        elif [[ -n "${empty_patches[$branch]:-}" ]]; then
+            # Remote was deleted because patch was empty
+            # Only delete local if not currently checked out
+            if [[ "$current_branch" != "$branch" ]]; then
+                git update-ref -d "$local_ref"
+                echo "  Deleted $branch (empty patch)"
+                ((updated_count++)) || true
+            else
+                echo "  Cannot delete $branch: currently checked out"
+            fi
+        fi
+    done
+    
+    # If we updated the current branch, reset working tree to match
+    if [[ -n "$current_branch" ]]; then
+        local new_head
+        new_head=$(git rev-parse HEAD 2>/dev/null || echo "")
+        if [[ -n "$new_head" && "$current_sha" != "$new_head" ]]; then
+            # HEAD changed, need to update working tree
+            git reset --hard HEAD &>/dev/null
+        fi
+    fi
+    
+    if [[ $updated_count -gt 0 ]]; then
+        echo "✓ Updated $updated_count local branches"
+    else
+        echo "  All local branches already up to date"
+    fi
+}
+
 # Sync command: synchronize patch stack with upstream
 cmd_sync() {
     # Set lock directory to be local to this Git repository
     LOCK_DIR="$(git rev-parse --git-dir)/patchstack.lock"
+    
+    # Check working copy is clean before starting
+    if ! check_working_copy_clean; then
+        return 1
+    fi
     
     # Generate unique run ID for this sync operation
     # Uses timestamp + random to ensure uniqueness across concurrent runs
@@ -1139,6 +1265,10 @@ cmd_sync() {
 
     # Push notes (non-fatal)
     push_notes
+    echo
+
+    # Phase 6: Update local branches to match remotes
+    update_local_branches "${replay_results[@]}"
     echo
 
     # Final summary
