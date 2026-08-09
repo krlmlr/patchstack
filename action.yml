@@ -1,0 +1,101 @@
+name: Patchstack sync
+description: Rebase a fork's patch branches onto upstream and rebuild its integration branch
+
+inputs:
+  upstream_repo:
+    description: >-
+      Upstream repository to fetch, as a URL or `owner/repo`. Leave empty when
+      the upstream branch already lives in this repository, as it does for a
+      fork whose `main` is mirrored from upstream.
+    required: false
+    default: ""
+  upstream_branch:
+    description: Upstream branch to track. Defaults to the integration branch's name.
+    required: false
+    default: ""
+  main_branch:
+    description: Integration branch — the one rebuilt from upstream plus the stack.
+    required: false
+    default: main
+  patch_glob:
+    description: >-
+      Space-separated globs a branch name must match to count as a patch. The
+      default takes every branch that descends from the base, which is only
+      right for a repository holding nothing but the stack.
+    required: false
+    default: "*"
+  git_user_name:
+    description: Author name for the commits the sync writes.
+    required: false
+    default: patchstack-bot
+  git_user_email:
+    description: Author email for the commits the sync writes.
+    required: false
+    default: patchstack-bot@users.noreply.github.com
+
+runs:
+  using: composite
+  steps:
+    - name: Configure git
+      shell: bash
+      env:
+        GIT_USER_NAME: ${{ inputs.git_user_name }}
+        GIT_USER_EMAIL: ${{ inputs.git_user_email }}
+      run: |
+        set -euo pipefail
+        git config user.name "$GIT_USER_NAME"
+        git config user.email "$GIT_USER_EMAIL"
+
+    - name: Fetch
+      shell: bash
+      env:
+        UPSTREAM_REPO: ${{ inputs.upstream_repo }}
+      run: |
+        set -euo pipefail
+
+        if [ -n "$UPSTREAM_REPO" ]; then
+          case "$UPSTREAM_REPO" in
+            *://*|git@*) url=$UPSTREAM_REPO ;;
+            *) url=https://github.com/$UPSTREAM_REPO.git ;;
+          esac
+          git remote remove upstream 2>/dev/null || true
+          git remote add upstream "$url"
+          git fetch --prune --no-tags upstream
+        fi
+
+        git fetch --prune --no-tags origin
+
+    - name: Sync
+      shell: bash
+      env:
+        PATCH_REMOTE: origin
+        # With no upstream repository given, the upstream branch is in this
+        # repository, so both remotes are `origin`.
+        UPSTREAM_REMOTE: ${{ inputs.upstream_repo != '' && 'upstream' || 'origin' }}
+        MAIN_BRANCH: ${{ inputs.main_branch }}
+        UPSTREAM_BRANCH: ${{ inputs.upstream_branch }}
+        PATCH_GLOB: ${{ inputs.patch_glob }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+
+        # An empty UPSTREAM_BRANCH must fall back to MAIN_BRANCH, and an
+        # exported empty string would not.
+        if [ -z "$UPSTREAM_BRANCH" ]; then
+          unset UPSTREAM_BRANCH
+        fi
+
+        bash "$ACTION_PATH/scripts/patchstack" sync | tee "$RUNNER_TEMP/patchstack.log"
+
+    - name: Summarize
+      if: always()
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ -f "$RUNNER_TEMP/patchstack.log" ]; then
+          {
+            echo '```'
+            cat "$RUNNER_TEMP/patchstack.log"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+        fi
