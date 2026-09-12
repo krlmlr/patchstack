@@ -72,10 +72,21 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: yourusername/patchstack@v1
+      - uses: krlmlr/patchstack@main
         with:
-          upstream_repo: https://github.com/original/repo.git
+          upstream_repo: original/repo
+          patch_glob: "patch-*"
+```
+
+For a fork whose `main` is mirrored from upstream, name the two branches and
+leave `upstream_repo` empty — the mirror is already in this repository:
+
+```yaml
+      - uses: krlmlr/patchstack@main
+        with:
+          main_branch: fork
           upstream_branch: main
+          patch_glob: "b-* f-*"
 ```
 
 ## How It Works
@@ -129,19 +140,17 @@ If a patch fails to rebase or integrate:
 # Sync fork with upstream (main command)
 ./scripts/patchstack sync
 
-# Show current patch stack status
-./scripts/patchstack status
-
 # List all patch branches
 ./scripts/patchstack list
-
-# Validate without making changes (dry-run)
-./scripts/patchstack sync --dry-run
 ```
+
+`sync` is the only command that writes. `list` is the way to check what the next
+sync would consider a patch before running it — worth doing after changing
+`PATCH_GLOB`.
 
 ### Configuration
 
-Set via environment variables or `.patchstackrc`:
+Set via environment variables:
 
 ```bash
 # Remote containing patch branches (default: origin)
@@ -150,12 +159,35 @@ PATCH_REMOTE=origin
 # Remote pointing to upstream repo (default: upstream)
 UPSTREAM_REMOTE=upstream
 
-# Main integration branch (default: main)
+# Integration branch, the one rebuilt from upstream plus the stack (default: main)
 MAIN_BRANCH=main
 
-# Upstream branch to track (default: main)
+# Upstream branch to track (default: the value of MAIN_BRANCH)
 UPSTREAM_BRANCH=main
+
+# Space-separated globs a branch name must match to count as a patch (default: *)
+PATCH_GLOB='*'
 ```
+
+### Forks whose `main` is a mirror
+
+Some forks cannot integrate on `main`, because a mirroring bot owns it — the
+[Pull app](https://github.com/wei/pull) hard-resets it from upstream on every
+sync. Such a fork keeps `main` as a 1:1 mirror and integrates on a second
+branch, conventionally `fork`, which is then its default branch:
+
+```bash
+PATCH_REMOTE=origin UPSTREAM_REMOTE=origin \
+MAIN_BRANCH=fork UPSTREAM_BRANCH=main \
+PATCH_GLOB='b-* f-*' \
+  ./scripts/patchstack sync
+```
+
+`UPSTREAM_REMOTE` is the fork itself here: the mirror already carries upstream's
+commits, so there is no second repository to fetch. `PATCH_GLOB` matters more in
+this layout than in a stack-only repository — a fork like this also carries
+release branches and working branches, and without a glob every one of them that
+descends from the base is taken for a patch.
 
 ### Creating Patch Branches
 

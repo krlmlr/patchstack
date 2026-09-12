@@ -9,6 +9,19 @@ PATCH_REMOTE="${PATCH_REMOTE:-origin}"
 UPSTREAM_REMOTE="${UPSTREAM_REMOTE:-upstream}"
 MAIN_BRANCH="${MAIN_BRANCH:-main}"
 
+# Upstream branch to track. Defaults to MAIN_BRANCH, which is the common case:
+# the fork's integration branch is named after the upstream branch it tracks.
+# Set it when the two differ -- a fork whose own `main` mirrors upstream and
+# whose integration lives on `fork` uses MAIN_BRANCH=fork UPSTREAM_BRANCH=main,
+# and then UPSTREAM_REMOTE may be the fork itself.
+UPSTREAM_BRANCH="${UPSTREAM_BRANCH:-$MAIN_BRANCH}"
+
+# Space-separated globs a branch name must match to count as a patch branch.
+# The default takes every branch, which is right for a repository that holds
+# nothing but the stack. Narrow it -- PATCH_GLOB='b-* f-*' -- for a fork that
+# also carries release branches or working branches, so those are left alone.
+PATCH_GLOB="${PATCH_GLOB:-*}"
+
 # Branch name to track the last synced upstream/main
 # This is used to discover patch branches (descendants of this base)
 # Stored as a branch in origin (refs/heads/patchstack/upstream-base)
@@ -174,8 +187,8 @@ get_upstream_base() {
     # Fall back to merge-base of upstream/main and origin/main (first sync scenario)
     # This handles cases where origin/main has commits not in upstream
     local upstream_sha origin_sha
-    upstream_sha=$(git rev-parse "refs/remotes/$UPSTREAM_REMOTE/$MAIN_BRANCH" 2>/dev/null) || {
-        echo "Error: Cannot find upstream/$MAIN_BRANCH" >&2
+    upstream_sha=$(git rev-parse "refs/remotes/$UPSTREAM_REMOTE/$UPSTREAM_BRANCH" 2>/dev/null) || {
+        echo "Error: Cannot find $UPSTREAM_REMOTE/$UPSTREAM_BRANCH" >&2
         return 1
     }
     origin_sha=$(git rev-parse "refs/remotes/$PATCH_REMOTE/$MAIN_BRANCH" 2>/dev/null) || {
@@ -205,6 +218,7 @@ discover_patch_branches() {
     }
 
     local origin_main_ref="refs/remotes/$PATCH_REMOTE/$MAIN_BRANCH"
+    local origin_upstream_ref="refs/remotes/$PATCH_REMOTE/$UPSTREAM_BRANCH"
 
     # Collect branches that are descendants of the base with commits beyond it
     local branches=()
@@ -212,11 +226,30 @@ discover_patch_branches() {
         # Skip main branch
         [[ "$ref" == "$origin_main_ref" ]] && continue
 
+        # Skip the fork's own copy of the upstream branch, which is a mirror
+        # and not a patch when MAIN_BRANCH and UPSTREAM_BRANCH differ
+        [[ "$ref" == "$origin_upstream_ref" ]] && continue
+
         # Skip HEAD
         [[ "$ref" == "refs/remotes/$PATCH_REMOTE/HEAD" ]] && continue
 
         # Skip patchstack internal refs
         [[ "$ref" == refs/remotes/"$PATCH_REMOTE"/patchstack/* ]] && continue
+
+        # Skip anything PATCH_GLOB does not name. `read` splits on whitespace
+        # without expanding the patterns as paths, which plain word splitting
+        # would do -- the default `*` names every file in the working directory.
+        local candidate=${ref#refs/remotes/"$PATCH_REMOTE"/}
+        local patterns=() pattern matched=false
+        read -ra patterns <<<"$PATCH_GLOB"
+        for pattern in "${patterns[@]}"; do
+            # shellcheck disable=SC2053  # matching a glob is the point
+            if [[ "$candidate" == $pattern ]]; then
+                matched=true
+                break
+            fi
+        done
+        [[ "$matched" == true ]] || continue
 
         local branch_sha
         branch_sha=$(git rev-parse "$ref")
@@ -248,7 +281,7 @@ discover_patch_branches() {
 replay_patch_commits() {
     local branch_name=$1
     local remote_ref="refs/remotes/$PATCH_REMOTE/$branch_name"
-    local upstream_ref="refs/remotes/$UPSTREAM_REMOTE/$MAIN_BRANCH"
+    local upstream_ref="refs/remotes/$UPSTREAM_REMOTE/$UPSTREAM_BRANCH"
     local tmp_ref="$RUN_REF_PREFIX/$branch_name"
     local tmp_branch="patchstack-${RUN_ID}-tmp-$branch_name"
 
@@ -497,7 +530,7 @@ create_squash_commit() {
 
 # Build new main by integrating patches sequentially
 integrate_patches() {
-    local upstream_ref="refs/remotes/$UPSTREAM_REMOTE/$MAIN_BRANCH"
+    local upstream_ref="refs/remotes/$UPSTREAM_REMOTE/$UPSTREAM_BRANCH"
     local integration_ref="$RUN_REF_PREFIX/main"
 
     # Start from upstream/main
@@ -617,7 +650,7 @@ calculate_ref_updates() {
         local tmp_tree
         local upstream_tree
         tmp_tree=$(git rev-parse "$tmp_ref^{tree}")
-        upstream_tree=$(git rev-parse "refs/remotes/$UPSTREAM_REMOTE/$MAIN_BRANCH^{tree}")
+        upstream_tree=$(git rev-parse "refs/remotes/$UPSTREAM_REMOTE/$UPSTREAM_BRANCH^{tree}")
         
         verbose_echo "calculate_ref_updates: tmp_tree=$tmp_tree, upstream_tree=$upstream_tree"
         
@@ -950,7 +983,7 @@ push_notes() {
 # This records the current upstream/main as the base for future syncs
 update_upstream_base() {
     local upstream_sha
-    upstream_sha=$(git rev-parse "refs/remotes/$UPSTREAM_REMOTE/$MAIN_BRANCH")
+    upstream_sha=$(git rev-parse "refs/remotes/$UPSTREAM_REMOTE/$UPSTREAM_BRANCH")
     
     echo "Updating upstream-base reference..."
     
@@ -1359,7 +1392,9 @@ Description:
 Configuration:
     PATCH_REMOTE    Remote for patch branches (default: origin)
     UPSTREAM_REMOTE Remote for upstream (default: upstream)
-    MAIN_BRANCH     Main branch name (default: main)
+    MAIN_BRANCH     Integration branch name (default: main)
+    UPSTREAM_BRANCH Upstream branch to track (default: \$MAIN_BRANCH)
+    PATCH_GLOB      Globs a branch must match to be a patch (default: *)
 EOF
 }
 
